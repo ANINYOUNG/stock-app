@@ -6,7 +6,6 @@ import requests
 from bs4 import BeautifulSoup
 import re
 import google.generativeai as genai
-import config
 import io
 
 # --- [초기 설정 및 API 키 보안 세팅] ---
