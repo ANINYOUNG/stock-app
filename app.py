@@ -24,10 +24,59 @@ model = genai.GenerativeModel('gemini-2.5-flash')
 
 # ... (이 아래로는 기존 코드와 100% 동일합니다) ...
 
-# 한국거래소 전 종목 데이터 캐싱 (속도 최적화 및 섹터 병합)
+# 한국거래소 전 종목 데이터 캐싱 (해외 IP 차단 우회 로직 포함 완전판)
 @st.cache_data(ttl=3600)
 def get_krx_data():
-    df_krx = fdr.StockListing('KRX')
+    try:
+        # [Plan A] 기본 fdr API (내 PC 등 한국 IP에서는 정상 작동)
+        df_krx = fdr.StockListing('KRX')
+        if 'Sector' not in df_krx.columns:
+            try:
+                df_desc = fdr.StockListing('KRX-DESC')
+                if 'Symbol' in df_desc.columns: df_desc = df_desc.rename(columns={'Symbol': 'Code'})
+                df_krx = pd.merge(df_krx, df_desc[['Code', 'Sector']], on='Code', how='left')
+            except:
+                df_krx['Sector'] = '미분류'
+        df_krx['Sector'] = df_krx['Sector'].fillna('미분류')
+        return df_krx
+    
+    except Exception as e:
+        # [Plan B] KRX가 해외 IP(Streamlit 미국 서버)를 차단했을 때 '네이버 금융' 우회 스크래핑
+        data = []
+        for sosok in [0, 1]: # 0: 코스피, 1: 코스닥
+            for page in range(1, 12): # 시총 상위 약 550개씩 총 1100개 우회 추출
+                url = f"https://finance.naver.com/sise/sise_market_sum.naver?sosok={sosok}&page={page}"
+                res = requests.get(url, headers={'User-agent': 'Mozilla/5.0'})
+                soup = BeautifulSoup(res.text, 'html.parser')
+                table = soup.find('table', {'class': 'type_2'})
+                
+                if not table: continue
+                
+                for row in table.find_all('tr'):
+                    cols = row.find_all('td')
+                    if len(cols) >= 7:
+                        a_tag = cols[1].find('a')
+                        if a_tag:
+                            code = a_tag['href'].split('code=')[-1]
+                            name = a_tag.text.strip()
+                            price_str = cols[2].text.strip().replace(',', '')
+                            marcap_str = cols[6].text.strip().replace(',', '')
+                            
+                            try:
+                                marcap = int(marcap_str) * 100000000 # 억원 -> 원 변환
+                                price = int(price_str)
+                                stocks = int(marcap / price) if price > 0 else 1
+                            except:
+                                marcap, stocks = 0, 1
+                                
+                            data.append({
+                                'Code': code, 'Name': name, 'Sector': '미분류', 
+                                'Marcap': marcap, 'Stocks': stocks
+                            })
+        
+        df_backup = pd.DataFrame(data)
+        df_backup = df_backup.sort_values('Marcap', ascending=False).reset_index(drop=True)
+        return df_backup
     
     # 'Sector' 컬럼이 없다면 'KRX-DESC'에서 가져와서 병합 (라이브러리 업데이트 대응)
     if 'Sector' not in df_krx.columns:
