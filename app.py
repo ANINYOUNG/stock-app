@@ -11,13 +11,19 @@ import io
 # --- [초기 설정 및 API 키 보안 세팅] ---
 st.set_page_config(layout="wide", page_title="AI 퀀트 스캐너 & 애널리스트")
 
+# 무조건 import config를 하지 않고, 여기서만 조심스럽게 시도합니다.
 try:
+    import config
     API_KEY = config.GEMINI_API_KEY
 except ImportError:
+    # 깃허브/클라우드 환경이라 config 파일이 없으면 비밀 금고에서 꺼냅니다.
     API_KEY = st.secrets["GEMINI_API_KEY"]
 
 genai.configure(api_key=API_KEY)
 model = genai.GenerativeModel('gemini-2.5-flash')
+
+# (이 아래부터는 기존 코드와 완전히 동일합니다!)
+# ...
 
 # 한국거래소 전 종목 데이터 캐싱 (해외 IP 차단 우회 로직 포함 완전판)
 @st.cache_data(ttl=3600)
