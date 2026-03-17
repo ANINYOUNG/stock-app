@@ -6,29 +6,24 @@ import requests
 from bs4 import BeautifulSoup
 import re
 import google.generativeai as genai
+import config
 import io
 
 # --- [초기 설정 및 API 키 보안 세팅] ---
 st.set_page_config(layout="wide", page_title="AI 퀀트 스캐너 & 애널리스트")
 
-# 로컬(내 PC)의 config.py와 클라우드의 st.secrets를 모두 지원하도록 똑똑하게 처리!
 try:
-    import config
     API_KEY = config.GEMINI_API_KEY
 except ImportError:
-    # config 파일이 없으면(클라우드 배포 상태면) Streamlit 비밀 금고에서 키를 꺼내옴
     API_KEY = st.secrets["GEMINI_API_KEY"]
 
 genai.configure(api_key=API_KEY)
 model = genai.GenerativeModel('gemini-2.5-flash')
 
-# ... (이 아래로는 기존 코드와 100% 동일합니다) ...
-
 # 한국거래소 전 종목 데이터 캐싱 (해외 IP 차단 우회 로직 포함 완전판)
 @st.cache_data(ttl=3600)
 def get_krx_data():
     try:
-        # [Plan A] 기본 fdr API (내 PC 등 한국 IP에서는 정상 작동)
         df_krx = fdr.StockListing('KRX')
         if 'Sector' not in df_krx.columns:
             try:
@@ -41,10 +36,10 @@ def get_krx_data():
         return df_krx
     
     except Exception as e:
-        # [Plan B] KRX가 해외 IP(Streamlit 미국 서버)를 차단했을 때 '네이버 금융' 우회 스크래핑
         data = []
-        for sosok in [0, 1]: # 0: 코스피, 1: 코스닥
-            for page in range(1, 12): # 시총 상위 약 550개씩 총 1100개 우회 추출
+        for sosok in [0, 1]: 
+            # 최대 1000개 스캔을 대비해 네이버 우회 크롤링 범위를 25페이지(약 1200개씩)로 확장
+            for page in range(1, 25): 
                 url = f"https://finance.naver.com/sise/sise_market_sum.naver?sosok={sosok}&page={page}"
                 res = requests.get(url, headers={'User-agent': 'Mozilla/5.0'})
                 soup = BeautifulSoup(res.text, 'html.parser')
@@ -63,35 +58,20 @@ def get_krx_data():
                             marcap_str = cols[6].text.strip().replace(',', '')
                             
                             try:
-                                marcap = int(marcap_str) * 100000000 # 억원 -> 원 변환
+                                marcap = int(marcap_str) * 100000000 
                                 price = int(price_str)
                                 stocks = int(marcap / price) if price > 0 else 1
                             except:
-                                marcap, stocks = 0, 1
+                                marcap, stocks, price = 0, 1, 0
                                 
                             data.append({
                                 'Code': code, 'Name': name, 'Sector': '미분류', 
-                                'Marcap': marcap, 'Stocks': stocks
+                                'Marcap': marcap, 'Stocks': stocks, 'Price': price
                             })
         
         df_backup = pd.DataFrame(data)
         df_backup = df_backup.sort_values('Marcap', ascending=False).reset_index(drop=True)
         return df_backup
-    
-    # 'Sector' 컬럼이 없다면 'KRX-DESC'에서 가져와서 병합 (라이브러리 업데이트 대응)
-    if 'Sector' not in df_krx.columns:
-        try:
-            df_desc = fdr.StockListing('KRX-DESC')
-            if 'Symbol' in df_desc.columns:
-                df_desc = df_desc.rename(columns={'Symbol': 'Code'})
-            # Code(종목코드)를 기준으로 업종(Sector) 데이터만 쏙 빼와서 합치기
-            df_krx = pd.merge(df_krx, df_desc[['Code', 'Sector']], on='Code', how='left')
-        except Exception:
-            df_krx['Sector'] = '미분류'
-            
-    # 빈칸 처리
-    df_krx['Sector'] = df_krx['Sector'].fillna('미분류')
-    return df_krx
 
 def calculate_rsi(df, period=14):
     if len(df) < period: return 50.0
@@ -134,7 +114,6 @@ def get_recent_fin_value(soup, keyword):
         pass
     return 0.0
 
-# 스마트 머니(외국인/기관 최근 5일 순매수) 추적 함수
 def check_smart_money(code):
     try:
         url = f"https://finance.naver.com/item/frgn.naver?code={code}"
@@ -158,6 +137,7 @@ if 'min_roe' not in st.session_state: st.session_state.min_roe = 10
 if 'target_pbr' not in st.session_state: st.session_state.target_pbr = 1.5
 if 'max_debt' not in st.session_state: st.session_state.max_debt = 150
 if 'target_rsi' not in st.session_state: st.session_state.target_rsi = 70
+if 'min_price' not in st.session_state: st.session_state.min_price = 2000 # [신규] 기본 최소 주가 2,000원
 if 'scanned_data' not in st.session_state: st.session_state.scanned_data = None 
 
 if 'use_marcap' not in st.session_state: st.session_state.use_marcap = True
@@ -167,6 +147,7 @@ if 'use_roe' not in st.session_state: st.session_state.use_roe = True
 if 'use_debt' not in st.session_state: st.session_state.use_debt = True
 if 'use_op' not in st.session_state: st.session_state.use_op = True 
 if 'use_rsi' not in st.session_state: st.session_state.use_rsi = True
+if 'use_min_price' not in st.session_state: st.session_state.use_min_price = True # [신규] 동전주 방어 켜기
 
 # --- [사이드바: 종목 선별 기준] ---
 st.sidebar.header("🔍 1단계: 펀더멘털 필터 (재무)")
@@ -181,9 +162,9 @@ with st.sidebar.expander("❓ 용어 및 적정주가 모델 설명"):
     st.caption("📈 **MACD**: 이동평균선 기반 추세 전환 지표")
     st.caption("💸 **스마트머니**: 최근 5거래일 외국인/기관 순매수 합산")
 
-scan_limit = st.sidebar.selectbox("검사할 종목 수 (시총 상위)", [50, 100, 200, 500], index=0, key="main_scan_limit", help="국내 상장사 중 시가총액이 높은 순서대로 훑을 개수를 결정합니다.")
+# [신규] 1000개 옵션 추가
+scan_limit = st.sidebar.selectbox("검사할 종목 수 (시총 상위)", [50, 100, 200, 500, 1000], index=1, key="main_scan_limit", help="국내 상장사 중 시가총액이 높은 순서대로 훑을 개수를 결정합니다. 1,000개 선택 시 네이버 서버 크롤링에 3~5분 정도 소요될 수 있습니다.")
 
-# 가치 트랩 회피용 섹터 필터링
 df_krx_full = get_krx_data()
 sectors_list = [s for s in df_krx_full['Sector'].unique() if isinstance(s, str)]
 sectors_list.sort()
@@ -197,32 +178,41 @@ excluded_sectors = st.sidebar.multiselect(
 )
 
 st.session_state.use_marcap = st.sidebar.checkbox("✅ 최소 시가총액 적용", value=st.session_state.use_marcap)
-st.session_state.min_marcap = st.sidebar.number_input("시가총액 (억원)", value=st.session_state.min_marcap, step=100, disabled=not st.session_state.use_marcap, help="기업 덩치. 5,000억 이상을 우량주, 그 미만을 중소형주로 분류합니다.")
+st.session_state.min_marcap = st.sidebar.number_input("시가총액 (억원)", value=st.session_state.min_marcap, step=100, disabled=not st.session_state.use_marcap)
 st.session_state.min_marcap = st.sidebar.slider("드래그 조절", 0, 100000, st.session_state.min_marcap, step=100, label_visibility="collapsed", disabled=not st.session_state.use_marcap)
 
+# [신규 추가] 동전주(잡주) 제외 필터
+st.sidebar.divider()
+st.sidebar.header("🛡️ 1.5단계: 동전주 방어막 (가격)")
+st.session_state.use_min_price = st.sidebar.checkbox("✅ 최소 주가 적용 (동전주 제외)", value=st.session_state.use_min_price)
+st.session_state.min_price = st.sidebar.number_input("최소 주가 (원)", value=st.session_state.min_price, step=500, disabled=not st.session_state.use_min_price, help="세력의 장난이 심하거나 상장폐지 리스크가 있는 1,000원~2,000원 미만의 동전주를 검색에서 원천 차단합니다.")
+
+st.sidebar.divider()
+st.sidebar.header("🔍 2단계: 세부 재무 비율")
+
 st.session_state.use_per = st.sidebar.checkbox("✅ 최대 PER 적용", value=st.session_state.use_per)
-st.session_state.target_per = st.sidebar.number_input("PER (배)", value=st.session_state.target_per, step=1, disabled=not st.session_state.use_per, help="이익 대비 주가가 얼마나 싼지 나타냅니다. 보통 15~20배 이하를 권장합니다.")
+st.session_state.target_per = st.sidebar.number_input("PER (배)", value=st.session_state.target_per, step=1, disabled=not st.session_state.use_per)
 st.session_state.target_per = st.sidebar.slider("드래그 조절 ", 1, 100, st.session_state.target_per, label_visibility="collapsed", disabled=not st.session_state.use_per)
 
 st.session_state.use_pbr = st.sidebar.checkbox("✅ 최대 PBR 적용", value=st.session_state.use_pbr)
-st.session_state.target_pbr = st.sidebar.number_input("PBR (배)", value=st.session_state.target_pbr, step=0.1, disabled=not st.session_state.use_pbr, help="순자산 가치 대비 주가입니다. 1.5배 미만이면 강력한 '안전 마진'을 확보한 것으로 봅니다.")
+st.session_state.target_pbr = st.sidebar.number_input("PBR (배)", value=st.session_state.target_pbr, step=0.1, disabled=not st.session_state.use_pbr)
 st.session_state.target_pbr = st.sidebar.slider("드래그 조절  ", 0.1, 10.0, st.session_state.target_pbr, step=0.1, label_visibility="collapsed", disabled=not st.session_state.use_pbr)
 
 st.session_state.use_roe = st.sidebar.checkbox("✅ 최소 ROE 적용", value=st.session_state.use_roe)
-st.session_state.min_roe = st.sidebar.number_input("ROE (%)", value=st.session_state.min_roe, step=1, disabled=not st.session_state.use_roe, help="자기자본이익률입니다. 10% 이상이면 장사를 아주 잘하고 있는 기업입니다.")
+st.session_state.min_roe = st.sidebar.number_input("ROE (%)", value=st.session_state.min_roe, step=1, disabled=not st.session_state.use_roe)
 st.session_state.min_roe = st.sidebar.slider("드래그 조절   ", 0, 50, st.session_state.min_roe, label_visibility="collapsed", disabled=not st.session_state.use_roe)
 
 st.session_state.use_debt = st.sidebar.checkbox("✅ 최대 부채비율 적용", value=st.session_state.use_debt)
-st.session_state.max_debt = st.sidebar.number_input("부채비율 (%)", value=st.session_state.max_debt, step=10, disabled=not st.session_state.use_debt, help="회사가 가진 빚의 비율입니다. 150~200% 미만이어야 경제 위기 시 파산 리스크를 줄일 수 있습니다.")
+st.session_state.max_debt = st.sidebar.number_input("부채비율 (%)", value=st.session_state.max_debt, step=10, disabled=not st.session_state.use_debt)
 st.session_state.max_debt = st.sidebar.slider("드래그 조절    ", 10, 500, st.session_state.max_debt, step=10, label_visibility="collapsed", disabled=not st.session_state.use_debt)
 
-st.session_state.use_op = st.sidebar.checkbox("✅ 영업이익 흑자(+) 유지", value=st.session_state.use_op, help="최근 분기/연도 기준으로 영업이익이 마이너스(적자)인 기업을 기계적으로 걸러냅니다.")
+st.session_state.use_op = st.sidebar.checkbox("✅ 영업이익 흑자(+) 유지", value=st.session_state.use_op)
 
 st.sidebar.divider()
-st.sidebar.header("📈 2단계: 기술적 타이밍")
+st.sidebar.header("📈 3단계: 기술적 타이밍")
 
 st.session_state.use_rsi = st.sidebar.checkbox("✅ 최대 RSI 적용", value=st.session_state.use_rsi)
-st.session_state.target_rsi = st.sidebar.number_input("RSI (14일)", value=st.session_state.target_rsi, step=1, disabled=not st.session_state.use_rsi, help="상대강도지수입니다. 70 이상은 단기 과매수(고점) 구간이므로 진입을 피하는 것이 좋습니다.")
+st.session_state.target_rsi = st.sidebar.number_input("RSI (14일)", value=st.session_state.target_rsi, step=1, disabled=not st.session_state.use_rsi)
 st.session_state.target_rsi = st.sidebar.slider("드래그 조절     ", 10, 100, st.session_state.target_rsi, step=1, label_visibility="collapsed", disabled=not st.session_state.use_rsi)
 
 st.sidebar.divider()
@@ -231,7 +221,6 @@ scan_button = st.sidebar.button("🎯 스캐너 가동 (클릭!)", use_container
 # --- [메인 화면 로직: 매크로 풍향계 & 스캔] ---
 st.title("📈 AI 주식 발굴 및 심층 분석 시스템")
 
-# [신규 추가] 매크로 지표 분석 (KOSPI)
 try:
     df_kospi = fdr.DataReader('KS11').tail(20)
     cur_kospi = df_kospi['Close'].iloc[-1]
@@ -244,10 +233,9 @@ except:
     pass
 
 if scan_button:
-    with st.spinner(f'1차: 시총 상위 {scan_limit}개 종목 로드 중...'):
+    with st.spinner(f'1차: 시총 상위 {scan_limit}개 종목 로드 중... (1000개 선택 시 최대 5분 소요)'):
         df_krx = get_krx_data()
         
-        # 제외 업종 필터링 적용
         if excluded_sectors:
             df_krx = df_krx[~df_krx['Sector'].isin(excluded_sectors)]
             
@@ -276,7 +264,9 @@ if scan_button:
                 roe = (pbr / per) * 100 if per > 0 else 0.0
                 debt_ratio = get_recent_fin_value(soup, '부채비율')
                 op_profit = get_recent_fin_value(soup, '영업이익')
-                current_price = int(row.Marcap / float(row.Stocks)) if row.Stocks else 0
+                
+                # 우회 크롤링으로 들어왔을 때는 row.Price가 없을 수 있으므로 안전하게 처리
+                current_price = getattr(row, 'Price', int(row.Marcap / float(row.Stocks)) if getattr(row, 'Stocks', 0) else 0)
                 
                 fin_results.append({
                     'Code': code, 'Name': row.Name, '업종': row.Sector, '시가총액(억)': int(row.Marcap // 100000000), '현재가': current_price,
@@ -296,6 +286,9 @@ if scan_button:
             if st.session_state.use_roe: mask = mask & (df_fin['ROE'] >= st.session_state.min_roe)
             if st.session_state.use_debt: mask = mask & (df_fin['부채비율(%)'] <= st.session_state.max_debt)
             if st.session_state.use_op: mask = mask & (df_fin['영업이익(억)'] > 0)
+            # [신규 추가] 동전주(최소 주가) 방어막 마스크 적용
+            if st.session_state.use_min_price: mask = mask & (df_fin['현재가'] >= st.session_state.min_price)
+            
             survivors_df = df_fin[mask].copy()
         else:
             survivors_df = pd.DataFrame()
@@ -333,8 +326,9 @@ if st.session_state.scanned_data is not None and not st.session_state.scanned_da
     display_df = final_df.copy()
     display_df['시가총액(억)'] = display_df['시가총액(억)'].apply(lambda x: f"{x:,}")
     display_df['영업이익(억)'] = display_df['영업이익(억)'].apply(lambda x: f"{int(x):,}") 
+    display_df['현재가'] = display_df['현재가'].apply(lambda x: f"{int(x):,}") 
     
-    display_cols = ['Code', 'Name', '업종', '시가총액(억)', 'PER', 'PBR', 'ROE', '부채비율(%)', '영업이익(억)']
+    display_cols = ['Code', 'Name', '업종', '시가총액(억)', '현재가', 'PER', 'PBR', 'ROE', '부채비율(%)', '영업이익(억)']
     if st.session_state.use_rsi and 'RSI' in display_df.columns: display_cols.append('RSI')
     st.dataframe(display_df[display_cols], use_container_width=True, hide_index=True)
     
@@ -360,14 +354,12 @@ if st.session_state.scanned_data is not None and not st.session_state.scanned_da
                 df_price = fdr.DataReader(code).tail(400)
                 if df_price.empty: continue
                 
-                # 수급 분석
                 inst_sum, frgn_sum = check_smart_money(code)
                 if inst_sum > 0 and frgn_sum > 0: money_sig = "🔥 양매수"
                 elif inst_sum > 0: money_sig = "🟢 기관 매수"
                 elif frgn_sum > 0: money_sig = "🟢 외인 매수"
                 else: money_sig = "🔴 수급 이탈"
 
-                # 기술적 지표 계산
                 df_price['MA20'] = df_price['Close'].rolling(window=20).mean()
                 df_price['MA60'] = df_price['Close'].rolling(window=60).mean()
                 df_price['MA120'] = df_price['Close'].rolling(window=120).mean()
@@ -378,9 +370,8 @@ if st.session_state.scanned_data is not None and not st.session_state.scanned_da
                 signal_series = macd_series.ewm(span=9, adjust=False).mean()
                 hist_series = macd_series - signal_series
                 
-                # [신규] 거래량 변동 (20일 평균 대비)
                 if len(df_price) >= 20:
-                    avg_vol_20 = df_price['Volume'].rolling(window=20).mean().iloc[-2] # 어제까지의 20일 평균
+                    avg_vol_20 = df_price['Volume'].rolling(window=20).mean().iloc[-2]
                     cur_vol = df_price['Volume'].iloc[-1]
                     vol_ratio = (cur_vol / avg_vol_20) * 100 if avg_vol_20 > 0 else 0
                     if vol_ratio >= 200: vol_sig = f"🔥 폭발 ({int(vol_ratio)}%)"
@@ -464,7 +455,6 @@ if st.session_state.scanned_data is not None and not st.session_state.scanned_da
                 cur_price = df_target['Close'].iloc[-1]
                 cur_vol = df_target['Volume'].iloc[-1]
                 
-                # [신규] 리포트용 거래량 변동 데이터 세팅
                 avg_vol_20 = df_target['Volume'].rolling(window=20).mean().iloc[-2] if len(df_target) >= 20 else 0
                 vol_ratio = (cur_vol / avg_vol_20) * 100 if avg_vol_20 > 0 else 0
                 
