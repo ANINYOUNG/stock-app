@@ -343,12 +343,12 @@ if st.session_state.scanned_data is not None and not st.session_state.scanned_da
     
     st.divider()
     st.header("🚦 가치평가 & 스마트머니 & 백테스팅 대시보드")
-    st.info("💡 장바구니에 종목을 담아 기관/외국인의 최근 수급(스마트머니)과 적정주가, 과거 백테스트 결과를 확인하세요.")
+    st.info("💡 장바구니에 종목을 담아 기관/외국인의 수급, 거래량 폭발 여부, 과거 백테스트 결과를 확인하세요.")
     
     selected_names = st.multiselect("비교할 종목들을 선택하세요 (여러 개 선택 가능)", final_df['Name'].tolist())
     
     if st.button("🚀 선택 종목 정밀 비교 & 백테스트", use_container_width=True) and selected_names:
-        with st.spinner('차트 지표, 가치평가, 외국인/기관 수급 데이터를 분석 중입니다...'):
+        with st.spinner('차트 지표, 가치평가, 수급 및 거래량 데이터를 분석 중입니다...'):
             compare_results = []
             backtest_results = []
             
@@ -360,7 +360,7 @@ if st.session_state.scanned_data is not None and not st.session_state.scanned_da
                 df_price = fdr.DataReader(code).tail(400)
                 if df_price.empty: continue
                 
-                # --- [신규] 스마트머니 (수급) 분석 ---
+                # 수급 분석
                 inst_sum, frgn_sum = check_smart_money(code)
                 if inst_sum > 0 and frgn_sum > 0: money_sig = "🔥 양매수"
                 elif inst_sum > 0: money_sig = "🟢 기관 매수"
@@ -377,6 +377,17 @@ if st.session_state.scanned_data is not None and not st.session_state.scanned_da
                 macd_series = exp1 - exp2
                 signal_series = macd_series.ewm(span=9, adjust=False).mean()
                 hist_series = macd_series - signal_series
+                
+                # [신규] 거래량 변동 (20일 평균 대비)
+                if len(df_price) >= 20:
+                    avg_vol_20 = df_price['Volume'].rolling(window=20).mean().iloc[-2] # 어제까지의 20일 평균
+                    cur_vol = df_price['Volume'].iloc[-1]
+                    vol_ratio = (cur_vol / avg_vol_20) * 100 if avg_vol_20 > 0 else 0
+                    if vol_ratio >= 200: vol_sig = f"🔥 폭발 ({int(vol_ratio)}%)"
+                    elif vol_ratio >= 120: vol_sig = f"🟢 증가 ({int(vol_ratio)}%)"
+                    else: vol_sig = f"⚪ 평이 ({int(vol_ratio)}%)"
+                else:
+                    vol_sig = "-"
                 
                 def get_historical_signals(idx):
                     if idx < -len(df_price): return "-", "-"
@@ -401,9 +412,8 @@ if st.session_state.scanned_data is not None and not st.session_state.scanned_da
                     eps = current_price / per if per > 0 else 0
                     g = min(roe, 15) if roe > 0 else 0
                     graham_price = eps * (8.5 + 2 * g)
-                    target_per_price = eps * st.session_state.target_per
                 except:
-                    s_rim_price, graham_price, target_per_price = 0, 0, 0
+                    s_rim_price, graham_price = 0, 0
                 
                 cur_trend, cur_macd = get_historical_signals(-1)
                 drawdown = ((current_price - high_52w) / high_52w) * 100
@@ -413,8 +423,8 @@ if st.session_state.scanned_data is not None and not st.session_state.scanned_da
                     '종목명': name, '현재가': f"{int(current_price):,}원",
                     'S-RIM 적정가': f"{int(s_rim_price):,}원" if s_rim_price else "-",
                     '그레이엄 가치': f"{int(graham_price):,}원" if graham_price else "-",
-                    '① 이평선 추세': cur_trend, '② MACD': cur_macd, 
-                    '③ 스마트머니(5일)': money_sig, '④ 하락방어율': dd_signal
+                    '① 이평선': cur_trend, '② MACD': cur_macd, 
+                    '③ 스마트머니': money_sig, '④ 하락방어율': dd_signal, '⑤ 거래량(20일비)': vol_sig
                 })
                 
                 periods = [("3개월 전", -60), ("6개월 전", -120), ("1년 전", -250)]
@@ -434,7 +444,7 @@ if st.session_state.scanned_data is not None and not st.session_state.scanned_da
                     })
                 
             if compare_results:
-                st.subheader("1. 가치평가 및 현재 수급/신호등 대시보드")
+                st.subheader("1. 가치평가 및 현재 수급/거래량 대시보드")
                 st.dataframe(pd.DataFrame(compare_results), use_container_width=True, hide_index=True)
                 
                 st.subheader("2. 미니 백테스팅 (과거 매수 시점의 주가와 수익률)")
@@ -446,18 +456,20 @@ if st.session_state.scanned_data is not None and not st.session_state.scanned_da
     target_code = final_df[final_df['Name'] == target_name]['Code'].values[0]
     
     if st.button(f"📝 {target_name} AI 리포트 생성"):
-        with st.status("AI 리포트 작성 중... (거시경제 및 차트 데이터 수집 포함)", expanded=True) as status:
+        with st.status("AI 리포트 작성 중... (거시경제, 거래량 변동, 차트 데이터 수집 포함)", expanded=True) as status:
             try:
-                # 1. 타겟 종목의 기본 재무 데이터
                 row = final_df[final_df['Name'] == target_name].iloc[0]
                 
-                # 2. 타겟 종목의 기술적 지표 (최근 120일)
                 df_target = fdr.DataReader(target_code).tail(120)
                 cur_price = df_target['Close'].iloc[-1]
                 cur_vol = df_target['Volume'].iloc[-1]
+                
+                # [신규] 리포트용 거래량 변동 데이터 세팅
+                avg_vol_20 = df_target['Volume'].rolling(window=20).mean().iloc[-2] if len(df_target) >= 20 else 0
+                vol_ratio = (cur_vol / avg_vol_20) * 100 if avg_vol_20 > 0 else 0
+                
                 high_52w = df_target['High'].max()
                 
-                # 이동평균선 및 MACD, RSI 계산
                 ma20 = df_target['Close'].rolling(window=20).mean().iloc[-1]
                 ma60 = df_target['Close'].rolling(window=60).mean().iloc[-1]
                 ma120 = df_target['Close'].rolling(window=120).mean().iloc[-1]
@@ -467,7 +479,6 @@ if st.session_state.scanned_data is not None and not st.session_state.scanned_da
                 macd_state = "골든크로스(매수우위)" if macd > signal_line and hist > 0 else "데드크로스(매도우위)"
                 rsi_val = calculate_rsi(df_target).iloc[-1]
 
-                # 3. 매크로 데이터 수집 (코스피 추세 및 원달러 환율)
                 df_kospi = fdr.DataReader('KS11').tail(20)
                 kospi_state = "강세장" if df_kospi['Close'].iloc[-1] > df_kospi['Close'].mean() else "약세장"
                 
@@ -477,14 +488,13 @@ if st.session_state.scanned_data is not None and not st.session_state.scanned_da
                 except:
                     usd_krw = "데이터 없음"
 
-                # 4. 거버넌스 데이터 (배당률)
                 dividend = row.get('배당(%)', 0.0)
                 
-                # 5. AI에게 먹여줄 '초호화 도시락(프롬프트 데이터)' 포장하기
                 report_data = f"""
                 [종목 정보] {target_name} (코드: {target_code})
                 [재무/가치] PER: {row['PER']}배, PBR: {row['PBR']}배, ROE: {row['ROE']}%, 부채비율: {row['부채비율(%)']}%, 시가총액: {row['시가총액(억)']}억원, 최근 영업이익: {row['영업이익(억)']}억원
-                [기술 분석] 현재가: {cur_price:,}원, 금일 거래량: {cur_vol:,}주, 52주 최고가: {high_52w:,}원, 이평선 추세: {trend_state}, MACD: {macd_state}, RSI(14): {rsi_val:.1f}
+                [기술 분석] 현재가: {cur_price:,}원, 52주 최고가: {high_52w:,}원, 이평선 추세: {trend_state}, MACD: {macd_state}, RSI(14): {rsi_val:.1f}
+                [거래량 변동] 금일 거래량: {cur_vol:,}주, 20일 평균 거래량 대비 {vol_ratio:.1f}% 수준 (100% 초과시 평소보다 거래량 터진 것)
                 [거버넌스] 시가배당률: {dividend}%
                 [매크로] 코스피 시장 상태: {kospi_state}, 원/달러 환율: {usd_krw}원
                 """
@@ -494,7 +504,7 @@ if st.session_state.scanned_data is not None and not st.session_state.scanned_da
                 제공된 데이터가 있다면 막연한 소리 대신 해당 숫자를 반드시 인용하여 분석할 것.
                 제공된 데이터: {report_data}
                 
-                항목: 1.요약 2.개요 3.재무분석 4.밸류에이션 5.산업/경쟁 6.기술분석(이평선, MACD, RSI 수치 반드시 포함) 7.거버넌스(배당률 언급) 8.매크로(환율, 코스피 상태 언급) 9.촉매 10.베어케이스 11.시나리오 12.점수산출 13.최종판단 14.출처(네이버 금융 명시)
+                항목: 1.요약 2.개요 3.재무분석 4.밸류에이션 5.산업/경쟁 6.기술분석(이평선, MACD, 최근 거래량 폭발 여부 반드시 포함) 7.거버넌스 8.매크로 9.촉매 10.베어케이스 11.시나리오 12.점수산출 13.최종판단 14.출처(네이버 금융 명시)
                 """
                 
                 response = model.generate_content(prompt)
