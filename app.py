@@ -446,15 +446,59 @@ if st.session_state.scanned_data is not None and not st.session_state.scanned_da
     target_code = final_df[final_df['Name'] == target_name]['Code'].values[0]
     
     if st.button(f"📝 {target_name} AI 리포트 생성"):
-        with st.status("AI 리포트 작성 중...", expanded=True) as status:
+        with st.status("AI 리포트 작성 중... (거시경제 및 차트 데이터 수집 포함)", expanded=True) as status:
             try:
+                # 1. 타겟 종목의 기본 재무 데이터
                 row = final_df[final_df['Name'] == target_name].iloc[0]
-                report_data = f"종목:{target_name}, PER:{row['PER']}, PBR:{row['PBR']}, ROE:{row['ROE']}%, 부채비율:{row['부채비율(%)']}%"
-                prompt = f"""당신은 프랍 트레이더입니다. 다음 데이터를 바탕으로 14개 항목 투자 리포트를 한국어로 작성하라. 
+                
+                # 2. 타겟 종목의 기술적 지표 (최근 120일)
+                df_target = fdr.DataReader(target_code).tail(120)
+                cur_price = df_target['Close'].iloc[-1]
+                cur_vol = df_target['Volume'].iloc[-1]
+                high_52w = df_target['High'].max()
+                
+                # 이동평균선 및 MACD, RSI 계산
+                ma20 = df_target['Close'].rolling(window=20).mean().iloc[-1]
+                ma60 = df_target['Close'].rolling(window=60).mean().iloc[-1]
+                ma120 = df_target['Close'].rolling(window=120).mean().iloc[-1]
+                trend_state = "정배열(상승추세)" if ma20 > ma60 > ma120 else ("역배열(하락추세)" if ma20 < ma60 < ma120 else "혼조세")
+                
+                macd, signal_line, hist = calculate_macd(df_target)
+                macd_state = "골든크로스(매수우위)" if macd > signal_line and hist > 0 else "데드크로스(매도우위)"
+                rsi_val = calculate_rsi(df_target).iloc[-1]
+
+                # 3. 매크로 데이터 수집 (코스피 추세 및 원달러 환율)
+                df_kospi = fdr.DataReader('KS11').tail(20)
+                kospi_state = "강세장" if df_kospi['Close'].iloc[-1] > df_kospi['Close'].mean() else "약세장"
+                
+                try:
+                    df_usd = fdr.DataReader('USD/KRW').tail(1)
+                    usd_krw = df_usd['Close'].iloc[0]
+                except:
+                    usd_krw = "데이터 없음"
+
+                # 4. 거버넌스 데이터 (배당률)
+                dividend = row.get('배당(%)', 0.0)
+                
+                # 5. AI에게 먹여줄 '초호화 도시락(프롬프트 데이터)' 포장하기
+                report_data = f"""
+                [종목 정보] {target_name} (코드: {target_code})
+                [재무/가치] PER: {row['PER']}배, PBR: {row['PBR']}배, ROE: {row['ROE']}%, 부채비율: {row['부채비율(%)']}%, 시가총액: {row['시가총액(억)']}억원, 최근 영업이익: {row['영업이익(억)']}억원
+                [기술 분석] 현재가: {cur_price:,}원, 금일 거래량: {cur_vol:,}주, 52주 최고가: {high_52w:,}원, 이평선 추세: {trend_state}, MACD: {macd_state}, RSI(14): {rsi_val:.1f}
+                [거버넌스] 시가배당률: {dividend}%
+                [매크로] 코스피 시장 상태: {kospi_state}, 원/달러 환율: {usd_krw}원
+                """
+                
+                prompt = f"""
+                당신은 프랍 트레이딩 펌의 수석 수석 애널리스트입니다. 다음 제공된 데이터를 바탕으로 14개 항목 투자 리포트를 한국어로 작성하라. 
+                제공된 데이터가 있다면 막연한 소리 대신 해당 숫자를 반드시 인용하여 분석할 것.
                 제공된 데이터: {report_data}
-                항목: 1.요약 2.개요 3.재무분석 4.밸류에이션 5.산업/경쟁 6.기술분석 7.거버넌스 8.매크로 9.촉매 10.베어케이스 11.시나리오 12.점수산출 13.최종판단 14.출처(네이버 금융 명시)"""
+                
+                항목: 1.요약 2.개요 3.재무분석 4.밸류에이션 5.산업/경쟁 6.기술분석(이평선, MACD, RSI 수치 반드시 포함) 7.거버넌스(배당률 언급) 8.매크로(환율, 코스피 상태 언급) 9.촉매 10.베어케이스 11.시나리오 12.점수산출 13.최종판단 14.출처(네이버 금융 명시)
+                """
+                
                 response = model.generate_content(prompt)
                 status.update(label="분석 완료!", state="complete", expanded=False)
                 st.markdown(response.text)
             except Exception as e:
-                st.error(f"에러: {e}")
+                st.error(f"리포트 생성 중 에러 발생: {e}")
