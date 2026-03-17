@@ -6,14 +6,23 @@ import requests
 from bs4 import BeautifulSoup
 import re
 import google.generativeai as genai
-import config
 import io
 
-# --- [초기 설정] ---
+# --- [초기 설정 및 API 키 보안 세팅] ---
 st.set_page_config(layout="wide", page_title="AI 퀀트 스캐너 & 애널리스트")
 
-genai.configure(api_key=config.GEMINI_API_KEY)
+# 로컬(내 PC)의 config.py와 클라우드의 st.secrets를 모두 지원하도록 똑똑하게 처리!
+try:
+    import config
+    API_KEY = config.GEMINI_API_KEY
+except ImportError:
+    # config 파일이 없으면(클라우드 배포 상태면) Streamlit 비밀 금고에서 키를 꺼내옴
+    API_KEY = st.secrets["GEMINI_API_KEY"]
+
+genai.configure(api_key=API_KEY)
 model = genai.GenerativeModel('gemini-2.5-flash')
+
+# ... (이 아래로는 기존 코드와 100% 동일합니다) ...
 
 # 한국거래소 전 종목 데이터 캐싱 (속도 최적화 및 섹터 병합)
 @st.cache_data(ttl=3600)
