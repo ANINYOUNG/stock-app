@@ -167,7 +167,6 @@ with st.sidebar.expander("❓ 용어 및 적정주가 모델 설명"):
     st.caption("📈 **MACD**: 이동평균선 기반 추세 전환 지표")
     st.caption("💸 **스마트머니**: 최근 5거래일 외국인/기관 순매수 합산")
 
-# [신규] 1000개 옵션 추가
 scan_limit = st.sidebar.selectbox("검사할 종목 수 (시총 상위)", [50, 100, 200, 500, 1000], index=1, key="main_scan_limit", help="국내 상장사 중 시가총액이 높은 순서대로 훑을 개수를 결정합니다. 1,000개 선택 시 네이버 서버 크롤링에 3~5분 정도 소요될 수 있습니다.")
 
 df_krx_full = get_krx_data()
@@ -183,10 +182,10 @@ excluded_sectors = st.sidebar.multiselect(
 )
 
 st.session_state.use_marcap = st.sidebar.checkbox("✅ 최소 시가총액 적용", value=st.session_state.use_marcap)
-st.session_state.min_marcap = st.sidebar.number_input("시가총액 (억원)", value=st.session_state.min_marcap, step=100, disabled=not st.session_state.use_marcap)
+st.session_state.min_marcap = st.sidebar.number_input("시가총액 (억원)", value=st.session_state.min_marcap, step=100, disabled=not st.session_state.use_marcap, help="기업 덩치. 5,000억 이상을 우량주, 그 미만을 중소형주로 분류합니다.")
 st.session_state.min_marcap = st.sidebar.slider("드래그 조절", 0, 100000, st.session_state.min_marcap, step=100, label_visibility="collapsed", disabled=not st.session_state.use_marcap)
 
-# [신규 추가] 동전주(잡주) 제외 필터
+# 동전주(잡주) 제외 필터
 st.sidebar.divider()
 st.sidebar.header("🛡️ 1.5단계: 동전주 방어막 (가격)")
 st.session_state.use_min_price = st.sidebar.checkbox("✅ 최소 주가 적용 (동전주 제외)", value=st.session_state.use_min_price)
@@ -196,28 +195,28 @@ st.sidebar.divider()
 st.sidebar.header("🔍 2단계: 세부 재무 비율")
 
 st.session_state.use_per = st.sidebar.checkbox("✅ 최대 PER 적용", value=st.session_state.use_per)
-st.session_state.target_per = st.sidebar.number_input("PER (배)", value=st.session_state.target_per, step=1, disabled=not st.session_state.use_per)
+st.session_state.target_per = st.sidebar.number_input("PER (배)", value=st.session_state.target_per, step=1, disabled=not st.session_state.use_per, help="이익 대비 주가가 얼마나 싼지 나타냅니다. 보통 15~20배 이하를 권장합니다.")
 st.session_state.target_per = st.sidebar.slider("드래그 조절 ", 1, 100, st.session_state.target_per, label_visibility="collapsed", disabled=not st.session_state.use_per)
 
 st.session_state.use_pbr = st.sidebar.checkbox("✅ 최대 PBR 적용", value=st.session_state.use_pbr)
-st.session_state.target_pbr = st.sidebar.number_input("PBR (배)", value=st.session_state.target_pbr, step=0.1, disabled=not st.session_state.use_pbr)
+st.session_state.target_pbr = st.sidebar.number_input("PBR (배)", value=st.session_state.target_pbr, step=0.1, disabled=not st.session_state.use_pbr, help="순자산 가치 대비 주가입니다. 1.5배 미만이면 강력한 '안전 마진'을 확보한 것으로 봅니다.")
 st.session_state.target_pbr = st.sidebar.slider("드래그 조절  ", 0.1, 10.0, st.session_state.target_pbr, step=0.1, label_visibility="collapsed", disabled=not st.session_state.use_pbr)
 
 st.session_state.use_roe = st.sidebar.checkbox("✅ 최소 ROE 적용", value=st.session_state.use_roe)
-st.session_state.min_roe = st.sidebar.number_input("ROE (%)", value=st.session_state.min_roe, step=1, disabled=not st.session_state.use_roe)
+st.session_state.min_roe = st.sidebar.number_input("ROE (%)", value=st.session_state.min_roe, step=1, disabled=not st.session_state.use_roe, help="자기자본이익률입니다. 10% 이상이면 장사를 아주 잘하고 있는 기업입니다.")
 st.session_state.min_roe = st.sidebar.slider("드래그 조절   ", 0, 50, st.session_state.min_roe, label_visibility="collapsed", disabled=not st.session_state.use_roe)
 
 st.session_state.use_debt = st.sidebar.checkbox("✅ 최대 부채비율 적용", value=st.session_state.use_debt)
-st.session_state.max_debt = st.sidebar.number_input("부채비율 (%)", value=st.session_state.max_debt, step=10, disabled=not st.session_state.use_debt)
+st.session_state.max_debt = st.sidebar.number_input("부채비율 (%)", value=st.session_state.max_debt, step=10, disabled=not st.session_state.use_debt, help="회사가 가진 빚의 비율입니다. 150~200% 미만이어야 경제 위기 시 파산 리스크를 줄일 수 있습니다.")
 st.session_state.max_debt = st.sidebar.slider("드래그 조절    ", 10, 500, st.session_state.max_debt, step=10, label_visibility="collapsed", disabled=not st.session_state.use_debt)
 
-st.session_state.use_op = st.sidebar.checkbox("✅ 영업이익 흑자(+) 유지", value=st.session_state.use_op)
+st.session_state.use_op = st.sidebar.checkbox("✅ 영업이익 흑자(+) 유지", value=st.session_state.use_op, help="최근 분기/연도 기준으로 영업이익이 마이너스(적자)인 기업을 기계적으로 걸러냅니다.")
 
 st.sidebar.divider()
 st.sidebar.header("📈 3단계: 기술적 타이밍")
 
 st.session_state.use_rsi = st.sidebar.checkbox("✅ 최대 RSI 적용", value=st.session_state.use_rsi)
-st.session_state.target_rsi = st.sidebar.number_input("RSI (14일)", value=st.session_state.target_rsi, step=1, disabled=not st.session_state.use_rsi)
+st.session_state.target_rsi = st.sidebar.number_input("RSI (14일)", value=st.session_state.target_rsi, step=1, disabled=not st.session_state.use_rsi, help="상대강도지수입니다. 70 이상은 단기 과매수(고점) 구간이므로 진입을 피하는 것이 좋습니다.")
 st.session_state.target_rsi = st.sidebar.slider("드래그 조절     ", 10, 100, st.session_state.target_rsi, step=1, label_visibility="collapsed", disabled=not st.session_state.use_rsi)
 
 st.sidebar.divider()
