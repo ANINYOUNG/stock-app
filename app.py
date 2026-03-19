@@ -439,12 +439,13 @@ if st.session_state.scanned_data is not None and not st.session_state.scanned_da
     with col1:
         report_btn = st.button(f"📝 {target_name} AI 리포트 생성", use_container_width=True)
     with col2:
-        # [신규] 네이버 증권의 새로운 통합 웹 주소 반영
-        naver_url = f"https://stock.naver.com/domestic/stock/{target_code}/total"
-        st.link_button(f"🔴 {target_name} 실시간 호가창/차트 보기 (새 창)", naver_url, use_container_width=True)
+        # [수정 완료] 질문자님이 찾아주신 완벽한 실시간 호가창 주소 적용!
+        naver_url = f"https://stock.naver.com/domestic/stock/{target_code}/price"
+        st.link_button(f"🔴 {target_name} 실시간 호가창 보기 (새 창)", naver_url, use_container_width=True)
     
     if report_btn:
         with st.status("AI 리포트 작성 중... (거시경제, 차트 판독, 수급 데이터 수집 포함)", expanded=True) as status:
+            # ... (이 아래 AI 리포트 생성 로직은 기존과 100% 동일하게 두시면 됩니다!) ...
             try:
                 row = final_df[final_df['Name'] == target_name].iloc[0]
                 df_target = fdr.DataReader(target_code).tail(120)
