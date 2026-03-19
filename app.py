@@ -460,11 +460,26 @@ if st.session_state.scanned_data is not None and not st.session_state.scanned_da
                 st.dataframe(pd.DataFrame(backtest_results), use_container_width=True, hide_index=True)
 
     st.divider()
-    st.subheader("🤖 최종 승자를 가려라! 1:1 AI 심층 리포트")
+    st.subheader("🤖 최종 승자를 가려라! 1:1 AI 심층 리포트 & 실시간 대응")
+    
+    # 종목 선택기
     target_name = st.selectbox("리포트를 생성할 최종 타겟 종목 1개를 선택하세요", final_df['Name'].tolist())
     target_code = final_df[final_df['Name'] == target_name]['Code'].values[0]
     
-    if st.button(f"📝 {target_name} AI 리포트 생성"):
+    # [신규] 버튼을 나란히 배치하기 위해 컬럼(단) 나누기
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        # 기존 AI 리포트 생성 버튼
+        report_btn = st.button(f"📝 {target_name} AI 리포트 생성", use_container_width=True)
+        
+    with col2:
+        # [신규] 새 창으로 열리는 실시간 네이버 금융 링크 버튼
+        naver_url = f"https://finance.naver.com/item/main.naver?code={target_code}"
+        st.link_button(f"🔴 {target_name} 실시간 호가창/차트 보기 (새 창)", naver_url, use_container_width=True)
+
+    # 리포트 생성 로직 (들여쓰기 주의!)
+    if report_btn:
         with st.status("AI 리포트 작성 중... (거시경제, 캔들 판독, 수급 데이터 수집 포함)", expanded=True) as status:
             try:
                 row = final_df[final_df['Name'] == target_name].iloc[0]
@@ -487,7 +502,6 @@ if st.session_state.scanned_data is not None and not st.session_state.scanned_da
                 macd_state = "골든크로스(매수우위)" if macd > signal_line and hist > 0 else "데드크로스(매도우위)"
                 rsi_val = calculate_rsi(df_target).iloc[-1]
                 
-                # [신규] 리포트용 캔들 데이터 추가
                 candle_state = detect_candle_pattern(df_target)
 
                 df_kospi = fdr.DataReader('KS11').tail(20)
