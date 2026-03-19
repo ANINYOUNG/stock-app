@@ -352,12 +352,12 @@ if st.session_state.scanned_data is not None and not st.session_state.scanned_da
     
     st.divider()
     st.header("🚦 가치평가 & 스마트머니 & 백테스팅 대시보드")
-    st.info("💡 장바구니에 종목을 담아 수급, 거래량, 캔들 패턴, 적정주가 등을 정밀 분석하세요.")
+    st.info("💡 장바구니에 종목을 담아 수급, 거래량, 캔들 패턴, 볼린저 밴드 위치를 정밀 분석하세요.")
     
     selected_names = st.multiselect("비교할 종목들을 선택하세요 (여러 개 선택 가능)", final_df['Name'].tolist())
     
     if st.button("🚀 선택 종목 정밀 비교 & 백테스트", use_container_width=True) and selected_names:
-        with st.spinner('차트 지표, 가치평가, 캔들 및 거래량 데이터를 융합 분석 중입니다...'):
+        with st.spinner('차트 지표, 가치평가, 캔들/거래량/볼린저밴드 데이터를 융합 분석 중입니다...'):
             compare_results = []
             backtest_results = []
             
@@ -395,7 +395,27 @@ if st.session_state.scanned_data is not None and not st.session_state.scanned_da
                 else:
                     vol_sig = "-"
                 
-                # [신규] 캔들 패턴 판독 호출
+                # [신규] 볼린저 밴드 판독 로직
+                if len(df_price) >= 20:
+                    std20 = df_price['Close'].rolling(window=20).std().iloc[-1]
+                    ma20_cur = df_price['MA20'].iloc[-1]
+                    upper_band = ma20_cur + (std20 * 2)
+                    lower_band = ma20_cur - (std20 * 2)
+                    cur_price_val = df_price['Close'].iloc[-1]
+                    
+                    bandwidth = (upper_band - lower_band) / ma20_cur if ma20_cur > 0 else 0
+                    
+                    if cur_price_val <= lower_band * 1.02: # 하한선 근접(2% 이내) 또는 돌파
+                        bb_sig = "🟢 하한선 터치 (반등기대)"
+                    elif cur_price_val >= upper_band * 0.98: # 상한선 근접(2% 이내) 또는 돌파
+                        bb_sig = "🔴 상한선 터치 (조정주의)"
+                    elif bandwidth < 0.10: # 밴드폭이 매우 좁아진 스퀴즈 상태
+                        bb_sig = "🔥 밴드 수축 (변동성 임박)"
+                    else:
+                        bb_sig = "⚪ 밴드 내 순항"
+                else:
+                    bb_sig = "-"
+
                 candle_sig = detect_candle_pattern(df_price)
                 
                 def get_historical_signals(idx):
@@ -432,8 +452,8 @@ if st.session_state.scanned_data is not None and not st.session_state.scanned_da
                     '종목명': name, '현재가': f"{int(current_price):,}원",
                     'S-RIM 적정가': f"{int(s_rim_price):,}원" if s_rim_price else "-",
                     '① 이평선': cur_trend, '② MACD': cur_macd, 
-                    '③ 스마트머니': money_sig, '④ 하락방어율': dd_signal, 
-                    '⑤ 거래량(20일비)': vol_sig, '⑥ 캔들 패턴': candle_sig
+                    '③ 스마트머니': money_sig, '④ 방어율': dd_signal, 
+                    '⑤ 거래량': vol_sig, '⑥ 캔들': candle_sig, '⑦ 볼린저밴드': bb_sig
                 })
                 
                 periods = [("3개월 전", -60), ("6개월 전", -120), ("1년 전", -250)]
@@ -462,25 +482,18 @@ if st.session_state.scanned_data is not None and not st.session_state.scanned_da
     st.divider()
     st.subheader("🤖 최종 승자를 가려라! 1:1 AI 심층 리포트 & 실시간 대응")
     
-    # 종목 선택기
     target_name = st.selectbox("리포트를 생성할 최종 타겟 종목 1개를 선택하세요", final_df['Name'].tolist())
     target_code = final_df[final_df['Name'] == target_name]['Code'].values[0]
     
-    # [신규] 버튼을 나란히 배치하기 위해 컬럼(단) 나누기
     col1, col2 = st.columns(2)
-    
     with col1:
-        # 기존 AI 리포트 생성 버튼
         report_btn = st.button(f"📝 {target_name} AI 리포트 생성", use_container_width=True)
-        
     with col2:
-        # [신규] 새 창으로 열리는 실시간 네이버 금융 링크 버튼
         naver_url = f"https://finance.naver.com/item/main.naver?code={target_code}"
         st.link_button(f"🔴 {target_name} 실시간 호가창/차트 보기 (새 창)", naver_url, use_container_width=True)
-
-    # 리포트 생성 로직 (들여쓰기 주의!)
+    
     if report_btn:
-        with st.status("AI 리포트 작성 중... (거시경제, 캔들 판독, 수급 데이터 수집 포함)", expanded=True) as status:
+        with st.status("AI 리포트 작성 중... (거시경제, 캔들/볼린저밴드, 수급 데이터 수집 포함)", expanded=True) as status:
             try:
                 row = final_df[final_df['Name'] == target_name].iloc[0]
                 
@@ -504,6 +517,19 @@ if st.session_state.scanned_data is not None and not st.session_state.scanned_da
                 
                 candle_state = detect_candle_pattern(df_target)
 
+                # [신규] 리포트용 볼린저 밴드 판독
+                if len(df_target) >= 20:
+                    std20 = df_target['Close'].rolling(window=20).std().iloc[-1]
+                    upper_band = ma20 + (std20 * 2)
+                    lower_band = ma20 - (std20 * 2)
+                    bandwidth = (upper_band - lower_band) / ma20 if ma20 > 0 else 0
+                    if cur_price <= lower_band * 1.02: bb_state = "하한선 터치 (통계적 과매도, 반등 지지선 부근)"
+                    elif cur_price >= upper_band * 0.98: bb_state = "상한선 터치 (통계적 과매수, 저항선 부근)"
+                    elif bandwidth < 0.10: bb_state = "밴드 수축/스퀴즈 (에너지 응축 중, 곧 큰 변동성 발생 예상)"
+                    else: bb_state = "밴드 중심부 순항 중"
+                else:
+                    bb_state = "데이터 부족"
+
                 df_kospi = fdr.DataReader('KS11').tail(20)
                 kospi_state = "강세장" if df_kospi['Close'].iloc[-1] > df_kospi['Close'].mean() else "약세장"
                 
@@ -519,6 +545,7 @@ if st.session_state.scanned_data is not None and not st.session_state.scanned_da
                 [종목 정보] {target_name} (코드: {target_code})
                 [재무/가치] PER: {row['PER']}배, PBR: {row['PBR']}배, ROE: {row['ROE']}%, 부채비율: {row['부채비율(%)']}%, 시가총액: {row['시가총액(억)']}억원, 최근 영업이익: {row['영업이익(억)']}억원
                 [기술 분석] 현재가: {cur_price:,}원, 52주 최고가: {high_52w:,}원, 이평선 추세: {trend_state}, MACD: {macd_state}, RSI(14): {rsi_val:.1f}
+                [볼린저 밴드] 현재 위치: {bb_state}
                 [캔들 패턴] 오늘의 캔들: {candle_state}
                 [거래량 변동] 금일 거래량: {cur_vol:,}주, 20일 평균 거래량 대비 {vol_ratio:.1f}% 수준
                 [거버넌스] 시가배당률: {dividend}%
@@ -530,7 +557,7 @@ if st.session_state.scanned_data is not None and not st.session_state.scanned_da
                 제공된 데이터가 있다면 막연한 소리 대신 해당 숫자를 반드시 인용하여 분석할 것.
                 제공된 데이터: {report_data}
                 
-                항목: 1.요약 2.개요 3.재무분석 4.밸류에이션 5.산업/경쟁 6.기술분석(이평선, MACD, 최근 거래량 비율, 캔들 패턴의 의미를 반드시 포함) 7.거버넌스 8.매크로 9.촉매 10.베어케이스 11.시나리오 12.점수산출 13.최종판단 14.출처(네이버 금융 명시)
+                항목: 1.요약 2.개요 3.재무분석 4.밸류에이션 5.산업/경쟁 6.기술분석(이평선, MACD, 최근 거래량 비율, 볼린저 밴드의 위치적 의미, 캔들 패턴의 의미를 종합적으로 반드시 포함하여 서술) 7.거버넌스 8.매크로 9.촉매 10.베어케이스 11.시나리오 12.점수산출 13.최종판단 14.출처(네이버 금융 명시)
                 """
                 
                 response = model.generate_content(prompt)
