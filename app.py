@@ -41,6 +41,7 @@ def get_krx_data():
             for page in range(1, 25): 
                 url = f"https://finance.naver.com/sise/sise_market_sum.naver?sosok={sosok}&page={page}"
                 res = requests.get(url, headers={'User-agent': 'Mozilla/5.0'})
+                res.encoding = 'euc-kr' # [버그 수정] 한글 깨짐 방지
                 soup = BeautifulSoup(res.text, 'html.parser')
                 table = soup.find('table', {'class': 'type_2'})
                 if not table: continue
@@ -122,7 +123,6 @@ def get_recent_fin_value(soup, keyword):
     except: pass
     return 0.0
 
-# [신규 추가] 신용잔고율 추출 함수
 def get_credit_ratio(soup):
     try:
         for th in soup.find_all('th'):
@@ -138,6 +138,7 @@ def check_smart_money(code):
     try:
         url = f"https://finance.naver.com/item/frgn.naver?code={code}"
         res = requests.get(url, headers={'User-agent': 'Mozilla/5.0'})
+        res.encoding = 'euc-kr' # [버그 수정] 한글 깨짐 방지
         dfs = pd.read_html(io.StringIO(res.text), match='날짜')
         df_frgn = dfs[0].dropna(subset=['날짜'])
         recent_5 = df_frgn.head(5)
@@ -160,6 +161,11 @@ if 'min_price' not in st.session_state: st.session_state.min_price = 2000
 if 'scanned_data' not in st.session_state: st.session_state.scanned_data = None 
 if 'watchlist' not in st.session_state: st.session_state.watchlist = [] 
 
+# [신규 추가] 탭 이동 시에도 2번 탭의 정밀비교 데이터가 증발하지 않도록 영구 보존
+if 'compare_results' not in st.session_state: st.session_state.compare_results = None
+if 'backtest_results' not in st.session_state: st.session_state.backtest_results = None
+if 'scan_time_kst' not in st.session_state: st.session_state.scan_time_kst = ""
+
 if 'use_marcap' not in st.session_state: st.session_state.use_marcap = True
 if 'use_per' not in st.session_state: st.session_state.use_per = True
 if 'use_pbr' not in st.session_state: st.session_state.use_pbr = True
@@ -179,7 +185,6 @@ with st.sidebar.expander("❓ 용어 및 분석 지표 설명"):
     st.caption("💣 **신용잔고율**: 개미들의 '빚투' 비율 (8% 이상시 폭락 위험)")
 
 scan_limit = st.sidebar.selectbox("검사할 종목 수 (시총 상위)", [50, 100, 200, 500, 1000], index=1, help="국내 상장사 중 시가총액이 높은 순서대로 훑을 개수를 결정합니다.")
-
 df_krx_full = get_krx_data()
 sectors_list = [s for s in df_krx_full['Sector'].unique() if isinstance(s, str)]
 sectors_list.sort()
@@ -189,24 +194,17 @@ excluded_sectors = st.sidebar.multiselect("🚫 제외할 업종 (가치 트랩 
 with st.sidebar.expander("⚙️ 세부 재무/가격 필터 설정 (클릭하여 열기)"):
     st.session_state.use_marcap = st.checkbox("✅ 최소 시가총액 적용", value=st.session_state.use_marcap)
     st.session_state.min_marcap = st.number_input("시가총액 (억원)", value=st.session_state.min_marcap, step=100, disabled=not st.session_state.use_marcap, help="기업 덩치. 5,000억 이상을 우량주, 그 미만을 중소형주로 분류합니다.")
-    
     st.session_state.use_min_price = st.checkbox("✅ 최소 주가 적용 (동전주 제외)", value=st.session_state.use_min_price)
     st.session_state.min_price = st.number_input("최소 주가 (원)", value=st.session_state.min_price, step=500, disabled=not st.session_state.use_min_price, help="세력의 장난이 심한 1,000원~2,000원 미만의 동전주를 원천 차단합니다.")
-
     st.session_state.use_per = st.checkbox("✅ 최대 PER 적용", value=st.session_state.use_per)
     st.session_state.target_per = st.number_input("PER (배)", value=st.session_state.target_per, step=1, disabled=not st.session_state.use_per, help="이익 대비 주가가 얼마나 싼지 나타냅니다. 보통 15~20배 이하 권장.")
-
     st.session_state.use_pbr = st.checkbox("✅ 최대 PBR 적용", value=st.session_state.use_pbr)
     st.session_state.target_pbr = st.number_input("PBR (배)", value=st.session_state.target_pbr, step=0.1, disabled=not st.session_state.use_pbr, help="1.5배 미만이면 강력한 '안전 마진'을 확보한 것으로 봅니다.")
-
     st.session_state.use_roe = st.checkbox("✅ 최소 ROE 적용", value=st.session_state.use_roe)
     st.session_state.min_roe = st.number_input("ROE (%)", value=st.session_state.min_roe, step=1, disabled=not st.session_state.use_roe, help="자기자본이익률입니다. 10% 이상이면 장사를 아주 잘하고 있는 기업입니다.")
-
     st.session_state.use_debt = st.checkbox("✅ 최대 부채비율 적용", value=st.session_state.use_debt)
     st.session_state.max_debt = st.number_input("부채비율 (%)", value=st.session_state.max_debt, step=10, disabled=not st.session_state.use_debt, help="회사가 가진 빚의 비율입니다. 150~200% 미만 권장.")
-
     st.session_state.use_op = st.checkbox("✅ 영업이익 흑자(+) 유지", value=st.session_state.use_op, help="영업이익이 마이너스(적자)인 기업을 기계적으로 걸러냅니다.")
-    
     st.session_state.use_rsi = st.checkbox("✅ 최대 RSI 적용", value=st.session_state.use_rsi)
     st.session_state.target_rsi = st.number_input("RSI (14일)", value=st.session_state.target_rsi, step=1, disabled=not st.session_state.use_rsi, help="70 이상은 단기 과매수 구간이므로 진입을 피하는 것이 좋습니다.")
 
@@ -221,9 +219,6 @@ direct_scan_button = st.sidebar.button("🚀 선택 종목 다이렉트 분석 (
 # --- [메인 화면 로직: 매크로 풍향계 & 스캔] ---
 st.title("📈 AI 주식 발굴 및 심층 분석 시스템")
 
-# [신규] 분석 기준 일시(Timestamp) 생성 (한국 시간 KST 기준)
-current_time_kst = (datetime.utcnow() + timedelta(hours=9)).strftime('%Y년 %m월 %d일 %H:%M:%S')
-
 try:
     df_kospi = fdr.DataReader('KS11').tail(20)
     cur_kospi = df_kospi['Close'].iloc[-1]
@@ -237,6 +232,12 @@ except:
 
 if scan_button or direct_scan_button:
     st.session_state.scanned_data = None 
+    st.session_state.compare_results = None # 새 스캔 시 2번 탭 데이터도 초기화
+    st.session_state.backtest_results = None
+    
+    # 스캔 버튼을 누른 바로 그 시점의 시간을 저장
+    st.session_state.scan_time_kst = (datetime.utcnow() + timedelta(hours=9)).strftime('%Y년 %m월 %d일 %H:%M:%S')
+
     df_krx = get_krx_data()
     
     if direct_scan_button:
@@ -264,6 +265,7 @@ if scan_button or direct_scan_button:
             url = f"https://finance.naver.com/item/main.naver?code={code}" 
             try:
                 res = requests.get(url, headers={'User-agent': 'Mozilla/5.0'})
+                res.encoding = 'euc-kr' # [버그 수정] 한글 깨짐 방지
                 soup = BeautifulSoup(res.text, 'html.parser')
                 per = safe_float(soup.select_one('#_per').text if soup.select_one('#_per') else "0")
                 pbr = safe_float(soup.select_one('#_pbr').text if soup.select_one('#_pbr') else "0")
@@ -273,7 +275,6 @@ if scan_button or direct_scan_button:
                 op_profit = get_recent_fin_value(soup, '영업이익')
                 current_price = getattr(row, 'Price', int(row.Marcap / float(row.Stocks)) if getattr(row, 'Stocks', 0) else 0)
                 
-                # [신규] 신용잔고율 스크래핑
                 credit_ratio = get_credit_ratio(soup)
                 
                 fin_results.append({
@@ -328,10 +329,8 @@ if scan_button or direct_scan_button:
 if st.session_state.scanned_data is not None and not st.session_state.scanned_data.empty:
     final_df = st.session_state.scanned_data
     
-    # [신규] 분석 데이터의 신뢰도를 높여주는 Timestamp 표시
-    st.caption(f"🕒 **데이터 기준 일시 (KST):** {current_time_kst}")
+    st.caption(f"🕒 **데이터 기준 일시 (KST):** {st.session_state.scan_time_kst}")
     
-    # [신규] 스크롤 방지를 위한 3개의 탭(Tab) 생성
     tab1, tab2, tab3 = st.tabs(["📊 1. 검색 결과 리스트", "🚦 2. 정밀 분석 대시보드", "🤖 3. AI 리포트 & 호가창"])
     
     # --- 탭 1: 검색 결과 리스트 ---
@@ -342,7 +341,7 @@ if st.session_state.scanned_data is not None and not st.session_state.scanned_da
         display_df['영업이익(억)'] = display_df['영업이익(억)'].apply(lambda x: f"{int(x):,}") 
         display_df['현재가'] = display_df['현재가'].apply(lambda x: f"{int(x):,}") 
         
-        display_cols = ['Code', 'Name', '업종', '시가총액(억)', '현재가', 'PER', 'PBR', 'ROE', '부채비율(%)', '영업이익(억)']
+        display_cols = ['Code', 'Name', '업종', '시가총액(억)', '현재가', 'PER', 'PBR', 'ROE', '부채비율(%)', '영업이익(억)', '신용비율(%)']
         if 'RSI' in display_df.columns: display_cols.append('RSI')
         st.dataframe(display_df[display_cols], use_container_width=True, hide_index=True)
         
@@ -365,7 +364,6 @@ if st.session_state.scanned_data is not None and not st.session_state.scanned_da
                     per, pbr, roe = row['PER'], row['PBR'], row['ROE']
                     credit_ratio = row.get('신용비율(%)', 0.0)
                     
-                    # 1. 신용잔고 리스크 판독
                     if credit_ratio >= 8.0: credit_sig = f"💣 위험 ({credit_ratio}%)"
                     elif credit_ratio >= 4.0: credit_sig = f"⚠️ 주의 ({credit_ratio}%)"
                     else: credit_sig = f"🟢 안전 ({credit_ratio}%)"
@@ -428,7 +426,6 @@ if st.session_state.scanned_data is not None and not st.session_state.scanned_da
                     current_price = df_price['Close'].iloc[-1]
                     high_52w = df_price['High'].tail(250).max() 
                     
-                    # 2. 52주 신고가 모멘텀 판독
                     breakout_ratio = (current_price / high_52w) * 100 if high_52w > 0 else 0
                     if breakout_ratio >= 98: momentum_sig = "🦅 신고가 돌파"
                     elif breakout_ratio >= 90: momentum_sig = "↗️ 돌파 시도"
@@ -462,11 +459,17 @@ if st.session_state.scanned_data is not None and not st.session_state.scanned_da
                             '현재 수익률': ret_str, '당시 이평선': trend_past, '당시 MACD': macd_past
                         })
                     
+                # 분석이 끝나면 결과값을 세션 스탯(단기 기억장치)에 영구 저장
                 if compare_results:
-                    st.dataframe(pd.DataFrame(compare_results), use_container_width=True, hide_index=True)
-                    st.markdown("---")
-                    st.subheader("⏪ 미니 백테스팅 (과거 매수 시점의 주가와 수익률)")
-                    st.dataframe(pd.DataFrame(backtest_results), use_container_width=True, hide_index=True)
+                    st.session_state.compare_results = compare_results
+                    st.session_state.backtest_results = backtest_results
+
+        # 버튼을 다시 누르지 않아도, 기억장치에 저장된 표가 있으면 화면에 계속 띄워줌
+        if st.session_state.compare_results:
+            st.dataframe(pd.DataFrame(st.session_state.compare_results), use_container_width=True, hide_index=True)
+            st.markdown("---")
+            st.subheader("⏪ 미니 백테스팅 (과거 매수 시점의 주가와 수익률)")
+            st.dataframe(pd.DataFrame(st.session_state.backtest_results), use_container_width=True, hide_index=True)
 
     # --- 탭 3: AI 리포트 및 실시간 호가창 ---
     with tab3:
