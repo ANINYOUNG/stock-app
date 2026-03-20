@@ -48,6 +48,7 @@ def get_krx_data():
             for page in range(1, 25): 
                 url = f"https://finance.naver.com/sise/sise_market_sum.naver?sosok={sosok}&page={page}"
                 res = session.get(url, headers=headers)
+                res.encoding = 'euc-kr'
                 soup = BeautifulSoup(res.text, 'html.parser')
                 table = soup.find('table', {'class': 'type_2'})
                 if not table: continue
@@ -134,6 +135,7 @@ def check_smart_money(code):
     try:
         url = f"https://finance.naver.com/item/frgn.naver?code={code}"
         res = session.get(url, headers=headers)
+        res.encoding = 'euc-kr' 
         dfs = pd.read_html(io.StringIO(res.text), header=0)
         for df in dfs:
             if '날짜' in df.columns:
@@ -261,8 +263,8 @@ if scan_button or direct_scan_button:
             url = f"https://finance.naver.com/item/main.naver?code={code}" 
             try:
                 res = session.get(url, headers=headers)
-                html_text = res.content.decode('cp949', 'ignore') 
-                soup = BeautifulSoup(html_text, 'html.parser')
+                res.encoding = 'euc-kr' 
+                soup = BeautifulSoup(res.text, 'html.parser')
                 
                 per = safe_float(soup.select_one('#_per').text if soup.select_one('#_per') else "0")
                 pbr = safe_float(soup.select_one('#_pbr').text if soup.select_one('#_pbr') else "0")
@@ -277,7 +279,6 @@ if scan_button or direct_scan_button:
                     try: current_price = int(float(row.Marcap) / float(row.Stocks)) if float(getattr(row, 'Stocks', 0)) else 0
                     except: current_price = 0
                 
-                # [수정 완료] 신용비율 대신 확실하게 존재하는 현금 체력 지표 '유보율' 수집!
                 reserve_ratio = get_recent_fin_value(soup, '유보율')
                 
                 try: marcap_val = int(float(row.Marcap) // 100000000)
@@ -349,9 +350,16 @@ if st.session_state.scanned_data is not None and not st.session_state.scanned_da
         display_df['영업이익(억)'] = display_df['영업이익(억)'].apply(lambda x: f"{int(x):,}") 
         display_df['현재가'] = display_df['현재가'].apply(lambda x: f"{int(x):,}") 
         
-        # 신용비율 대신 '유보율(%)' 표출
         display_cols = ['Code', 'Name', '업종', '시가총액(억)', '현재가', 'PER', 'PBR', 'ROE', '부채비율(%)', '영업이익(억)', '유보율(%)']
         if 'RSI' in display_df.columns: display_cols.append('RSI')
+        
+        # [긴급 방어막] 메모리에 옛날 데이터가 남아있어 충돌하는 것을 자동 복구
+        missing_cols = [col for col in display_cols if col not in display_df.columns]
+        if missing_cols:
+            st.warning("🔄 지표 업데이트(유보율)가 감지되어 충돌 방지를 위해 캐시를 초기화했습니다! 왼쪽의 [🎯 스캐너 가동] 버튼을 한 번만 더 눌러주세요.")
+            st.session_state.scanned_data = None
+            st.stop()
+            
         st.dataframe(display_df[display_cols], use_container_width=True, hide_index=True)
         
         csv = convert_df_to_csv(display_df[display_cols])
@@ -372,7 +380,6 @@ if st.session_state.scanned_data is not None and not st.session_state.scanned_da
                     code = row['Code']
                     per, pbr, roe = row['PER'], row['PBR'], row['ROE']
                     
-                    # [수정] 유보율로 안전성 판독
                     reserve_ratio = row.get('유보율(%)', 0.0)
                     if reserve_ratio >= 1000: reserve_sig = f"🟢 튼튼 ({int(reserve_ratio)}%)"
                     elif reserve_ratio >= 500: reserve_sig = f"🟡 보통 ({int(reserve_ratio)}%)"
@@ -450,7 +457,7 @@ if st.session_state.scanned_data is not None and not st.session_state.scanned_da
                         '① 이평선': cur_trend, '② MACD': cur_macd, 
                         '③ 수급': money_sig, '④ 방어율(눌림)': dd_signal, 
                         '⑤ 거래량': vol_sig, '⑥ 캔들': candle_sig, '⑦ 볼린저': bb_sig,
-                        '⑧ 현금(유보)': reserve_sig, '⑨ 모멘텀': momentum_sig # 신용을 현금고로 교체!
+                        '⑧ 현금(유보)': reserve_sig, '⑨ 모멘텀': momentum_sig 
                     })
                     
                     periods = [("3개월 전", -60), ("6개월 전", -120), ("1년 전", -250)]
