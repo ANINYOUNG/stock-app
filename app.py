@@ -7,6 +7,7 @@ from bs4 import BeautifulSoup
 import re
 import google.generativeai as genai
 import io
+import time
 from datetime import datetime, timedelta
 
 # --- [초기 설정 및 API 키 보안 세팅] ---
@@ -20,6 +21,14 @@ except ImportError:
 
 genai.configure(api_key=API_KEY)
 model = genai.GenerativeModel('gemini-2.5-flash')
+
+# [핵심 방어막] 네이버 봇 차단을 피하기 위한 글로벌 세션 및 헤더 설정
+session = requests.Session()
+headers = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    'Accept-Language': 'ko-KR,ko;q=0.9',
+    'Referer': 'https://finance.naver.com/'
+}
 
 # 한국거래소 데이터 캐싱
 @st.cache_data(ttl=3600)
@@ -40,10 +49,8 @@ def get_krx_data():
         for sosok in [0, 1]: 
             for page in range(1, 25): 
                 url = f"https://finance.naver.com/sise/sise_market_sum.naver?sosok={sosok}&page={page}"
-                res = requests.get(url, headers={'User-agent': 'Mozilla/5.0'})
-                # [버그 수정] 모르는 글자가 나와도 무시하고 진행하도록 궁극의 방어막 적용
-                html_text = res.content.decode('cp949', 'ignore') 
-                soup = BeautifulSoup(html_text, 'html.parser')
+                res = session.get(url, headers=headers)
+                soup = BeautifulSoup(res.text, 'html.parser')
                 table = soup.find('table', {'class': 'type_2'})
                 if not table: continue
                 for row in table.find_all('tr'):
@@ -65,6 +72,7 @@ def get_krx_data():
                                 'Code': code, 'Name': name, 'Sector': '미분류', 
                                 'Marcap': marcap, 'Stocks': stocks, 'Price': price
                             })
+                time.sleep(0.05) # 봇 차단 방지용 0.05초 휴식
         df_backup = pd.DataFrame(data)
         df_backup = df_backup.sort_values('Marcap', ascending=False).reset_index(drop=True)
         return df_backup
@@ -126,26 +134,31 @@ def get_recent_fin_value(soup, keyword):
 
 def get_credit_ratio(soup):
     try:
-        for th in soup.find_all('th'):
-            if '신용비율' in th.text:
-                td = th.find_next_sibling('td') or th.find_parent('tr').find('td')
-                if td:
-                    val = re.sub(r'[^0-9.]', '', td.text)
-                    if val: return float(val)
+        # '신용비율' 이라는 글자가 포함된 태그를 더 정교하게 찾음
+        th = soup.find('th', string=re.compile('신용비율'))
+        if th:
+            td = th.find_next_sibling('td')
+            if td:
+                val = re.sub(r'[^0-9.]', '', td.text)
+                if val: return float(val)
     except: pass
     return 0.0
 
 def check_smart_money(code):
     try:
         url = f"https://finance.naver.com/item/frgn.naver?code={code}"
-        res = requests.get(url, headers={'User-agent': 'Mozilla/5.0'})
-        html_text = res.content.decode('cp949', 'ignore') # 깨짐 방어막
-        dfs = pd.read_html(io.StringIO(html_text), match='날짜')
-        df_frgn = dfs[0].dropna(subset=['날짜'])
-        recent_5 = df_frgn.head(5)
-        inst_sum = pd.to_numeric(recent_5.iloc[:, 5].astype(str).str.replace(',', ''), errors='coerce').sum()
-        frgn_sum = pd.to_numeric(recent_5.iloc[:, 6].astype(str).str.replace(',', ''), errors='coerce').sum()
-        return inst_sum, frgn_sum
+        res = session.get(url, headers=headers)
+        # [버그 완전 해결] header=0 을 넣어 표의 열 이름을 제대로 인식시킴
+        dfs = pd.read_html(io.StringIO(res.text), header=0)
+        for df in dfs:
+            if '날짜' in df.columns:
+                df_frgn = df.dropna(subset=['날짜'])
+                recent_5 = df_frgn.head(5)
+                # 정규식으로 안전하게 숫자만 추출하여 계산
+                inst_sum = pd.to_numeric(recent_5.iloc[:, 5].astype(str).str.replace(r'[^0-9\-]', '', regex=True), errors='coerce').fillna(0).sum()
+                frgn_sum = pd.to_numeric(recent_5.iloc[:, 6].astype(str).str.replace(r'[^0-9\-]', '', regex=True), errors='coerce').fillna(0).sum()
+                return inst_sum, frgn_sum
+        return 0, 0
     except: return 0, 0
 
 def convert_df_to_csv(df):
@@ -263,10 +276,8 @@ if scan_button or direct_scan_button:
             code = row.Code
             url = f"https://finance.naver.com/item/main.naver?code={code}" 
             try:
-                res = requests.get(url, headers={'User-agent': 'Mozilla/5.0'})
-                # [핵심 수정] 에러가 나도 무시하고(ignore) 텍스트를 강제 추출하여 루프 멈춤 방지
-                html_text = res.content.decode('cp949', 'ignore') 
-                soup = BeautifulSoup(html_text, 'html.parser')
+                res = session.get(url, headers=headers)
+                soup = BeautifulSoup(res.text, 'html.parser')
                 
                 per = safe_float(soup.select_one('#_per').text if soup.select_one('#_per') else "0")
                 pbr = safe_float(soup.select_one('#_pbr').text if soup.select_one('#_pbr') else "0")
@@ -275,7 +286,6 @@ if scan_button or direct_scan_button:
                 debt_ratio = get_recent_fin_value(soup, '부채비율')
                 op_profit = get_recent_fin_value(soup, '영업이익')
                 
-                # [안전장치 추가] 현재가를 HTML에서 더 정확하게 긁어오기
                 price_tag = soup.select_one('.no_today .blind')
                 if price_tag:
                     current_price = safe_float(price_tag.text)
@@ -295,6 +305,7 @@ if scan_button or direct_scan_button:
                 })
             except Exception as e: 
                 pass 
+            time.sleep(0.05) # 봇 차단 방지용 0.05초 휴식
             progress_bar.progress((idx + 1) / total_stocks, text=f"{progress_text} ({idx+1}/{total_stocks} 완료)")
         
         progress_bar.empty()
@@ -385,7 +396,7 @@ if st.session_state.scanned_data is not None and not st.session_state.scanned_da
                     
                     inst_sum, frgn_sum = check_smart_money(code)
                     if inst_sum > 0 and frgn_sum > 0: money_sig = "🔥 양매수"
-                    elif inst_sum > 0: money_sig = "🟢 기관 매 매수"
+                    elif inst_sum > 0: money_sig = "🟢 기관 매수"
                     elif frgn_sum > 0: money_sig = "🟢 외인 매수"
                     else: money_sig = "🔴 수급 이탈"
 
