@@ -134,13 +134,16 @@ def get_recent_fin_value(soup, keyword):
 
 def get_credit_ratio(soup):
     try:
-        # '신용비율' 이라는 글자가 포함된 태그를 더 정교하게 찾음
-        th = soup.find('th', string=re.compile('신용비율'))
-        if th:
-            td = th.find_next_sibling('td')
-            if td:
-                val = re.sub(r'[^0-9.]', '', td.text)
-                if val: return float(val)
+        # 모든 th 태그를 뒤져서 '신용비율'이라는 글자가 '포함'만 되어 있으면 무조건 긁어오도록 수정
+        for th in soup.find_all('th'):
+            if th.text and '신용비율' in th.text:
+                tr = th.find_parent('tr')
+                if tr:
+                    tds = tr.find_all('td')
+                    if tds:
+                        # 숫자와 소수점만 남기고 깔끔하게 추출
+                        val = re.sub(r'[^0-9.]', '', tds[-1].text)
+                        if val: return float(val)
     except: pass
     return 0.0
 
