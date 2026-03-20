@@ -29,6 +29,15 @@ headers = {
     'Referer': 'https://finance.naver.com/'
 }
 
+# [공통] 문자열을 안전하게 숫자로 변환하는 강력한 함수
+def safe_float(text):
+    try:
+        if not text: return 0.0
+        val = re.sub(r'[^0-9.\-]', '', text)
+        if not val or val in ['-', '.']: return 0.0
+        return float(val)
+    except: return 0.0
+
 @st.cache_data(ttl=3600)
 def get_krx_data():
     try:
@@ -112,24 +121,22 @@ def detect_candle_pattern(df):
     elif C < O: return "🔵 음봉"
     else: return "⚪ 보합"
 
-def safe_float(text):
-    try:
-        if not text or text.strip() in ['-', 'N/A', '']: return 0.0
-        return float(text.strip().replace(',', ''))
-    except: return 0.0
-
 def get_recent_fin_value(soup, keyword):
     try:
-        for th in soup.find_all('th'):
-            if keyword in th.text:
-                row = th.parent
-                tds = row.find_all('td')
-                for td in reversed(tds):
-                    val = td.text.strip().replace(',', '')
-                    if val and val not in ['-', 'N/A']: return float(val)
-                break
+        ths = soup.find_all('th', string=re.compile(keyword))
+        for th in ths:
+            tr = th.find_parent('tr')
+            if tr:
+                tds = tr.find_all('td')
+                if tds:
+                    val_str = re.sub(r'[^0-9.\-]', '', tds[-1].text)
+                    if val_str and val_str not in ['-', '.']:
+                        return float(val_str)
     except: pass
     return 0.0
+
+def get_reserve_ratio(soup):
+    return get_recent_fin_value(soup, '유보율')
 
 def check_smart_money(code):
     try:
@@ -174,7 +181,7 @@ if 'use_op' not in st.session_state: st.session_state.use_op = True
 if 'use_rsi' not in st.session_state: st.session_state.use_rsi = True
 if 'use_min_price' not in st.session_state: st.session_state.use_min_price = True 
 
-# --- [사이드바: 종목 선별 기준] ---
+# --- [사이드바: 종목 선별 기준 (도움말 영구보존)] ---
 st.sidebar.header("🔍 1~3단계: 전체 시장 스캔 필터")
 
 with st.sidebar.expander("❓ 용어 및 분석 지표 설명"):
@@ -218,22 +225,24 @@ direct_scan_button = st.sidebar.button("🚀 선택 종목 다이렉트 분석 (
 # --- [메인 화면 로직: 매크로 풍향계 & 스캔] ---
 st.title("📈 AI 주식 발굴 및 심층 분석 시스템")
 
+# [신규] 앱 접속 및 갱신 시점의 실시간 KST 시간 생성
+current_time_kst = (datetime.utcnow() + timedelta(hours=9)).strftime('%Y년 %m월 %d일 %H:%M')
+
 try:
     df_kospi = fdr.DataReader('KS11').tail(20)
     cur_kospi = df_kospi['Close'].iloc[-1]
     ma20_kospi = df_kospi['Close'].mean()
     if cur_kospi >= ma20_kospi:
-        st.success(f"🧭 **오늘의 시장 풍향계:** 🟢 강세장 (코스피 20일선 돌파 유지 중) | 현재가: {cur_kospi:,.2f}pt\n\n💡 **AI 전략 조언:** 시장에 돈이 돌고 있습니다. RSI 70 이하의 정배열 우량주를 적극적으로 공략하세요!")
+        st.success(f"🧭 **오늘의 시장 풍향계** (갱신: {current_time_kst}) 🟢 강세장 (코스피 20일선 돌파) | 현재가: {cur_kospi:,.2f}pt\n\n💡 **AI 전략 조언:** 시장에 돈이 돌고 있습니다. RSI 70 이하의 정배열 우량주를 적극적으로 공략하세요!")
     else:
-        st.error(f"🧭 **오늘의 시장 풍향계:** 🔴 약세장 (코스피 20일선 이탈) | 현재가: {cur_kospi:,.2f}pt\n\n💡 **AI 전략 조언:** 시장이 조정을 받고 있습니다. 가치평가(S-RIM) 대비 매우 저렴하고 하락방어율이 좋은 종목만 보수적으로 접근하세요.")
+        st.error(f"🧭 **오늘의 시장 풍향계** (갱신: {current_time_kst}) 🔴 약세장 (코스피 20일선 이탈) | 현재가: {cur_kospi:,.2f}pt\n\n💡 **AI 전략 조언:** 시장이 조정을 받고 있습니다. 가치평가(S-RIM) 대비 매우 저렴하고 하락방어율이 좋은 종목만 보수적으로 접근하세요.")
 except:
-    pass
+    st.info(f"🧭 **오늘의 시장 풍향계** (갱신: {current_time_kst}) 데이터를 불러오는 중입니다.")
 
 if scan_button or direct_scan_button:
     st.session_state.scanned_data = None 
     st.session_state.compare_results = None 
     st.session_state.backtest_results = None
-    
     st.session_state.scan_time_kst = (datetime.utcnow() + timedelta(hours=9)).strftime('%Y년 %m월 %d일 %H:%M:%S')
 
     df_krx = get_krx_data()
@@ -253,7 +262,7 @@ if scan_button or direct_scan_button:
                 filtered_by_cap = df_krx.sort_values('Marcap', ascending=False).head(scan_limit)
 
     if not filtered_by_cap.empty:
-        progress_text = f"2차: 네이버 금융 재무 및 리스크 데이터 수집 중..."
+        progress_text = f"2차: 네이버 금융 재무 및 유보율 데이터 수집 중..."
         progress_bar = st.progress(0, text=progress_text)
         fin_results = []
         total_stocks = len(filtered_by_cap)
@@ -263,8 +272,9 @@ if scan_button or direct_scan_button:
             url = f"https://finance.naver.com/item/main.naver?code={code}" 
             try:
                 res = session.get(url, headers=headers)
-                res.encoding = 'euc-kr' 
-                soup = BeautifulSoup(res.text, 'html.parser')
+                # 완전히 안전한 인코딩 방식 적용 (오류 무시)
+                html_text = res.content.decode('euc-kr', 'replace') 
+                soup = BeautifulSoup(html_text, 'html.parser')
                 
                 per = safe_float(soup.select_one('#_per').text if soup.select_one('#_per') else "0")
                 pbr = safe_float(soup.select_one('#_pbr').text if soup.select_one('#_pbr') else "0")
@@ -279,7 +289,8 @@ if scan_button or direct_scan_button:
                     try: current_price = int(float(row.Marcap) / float(row.Stocks)) if float(getattr(row, 'Stocks', 0)) else 0
                     except: current_price = 0
                 
-                reserve_ratio = get_recent_fin_value(soup, '유보율')
+                # 유보율 안전 추출
+                reserve_ratio = get_reserve_ratio(soup)
                 
                 try: marcap_val = int(float(row.Marcap) // 100000000)
                 except: marcap_val = 0
@@ -291,7 +302,7 @@ if scan_button or direct_scan_button:
                 })
             except Exception as e: 
                 pass 
-            time.sleep(0.05) 
+            time.sleep(0.05) # 네이버 봇 차단 방지 (필수)
             progress_bar.progress((idx + 1) / total_stocks, text=f"{progress_text} ({idx+1}/{total_stocks} 완료)")
         
         progress_bar.empty()
@@ -313,7 +324,7 @@ if scan_button or direct_scan_button:
             survivors_df = pd.DataFrame()
 
         if not survivors_df.empty:
-            progress_text2 = f"3차: 차트 분석 진행 중..."
+            progress_text2 = f"3차: 차트 분석 진행 중... (차단 우회 중)"
             progress_bar2 = st.progress(0, text=progress_text2)
             final_results = []
             total_survivors = len(survivors_df)
@@ -321,18 +332,32 @@ if scan_button or direct_scan_button:
             
             for idx, row_dict in enumerate(survivors_records):
                 try:
+                    time.sleep(0.05) # 차트 데이터 요청 시에도 차단 방어막 추가
                     df_price = fdr.DataReader(row_dict['Code']).tail(40) 
                     if not df_price.empty:
                         rsi_val = calculate_rsi(df_price).iloc[-1]
                         if direct_scan_button or not st.session_state.use_rsi or rsi_val <= st.session_state.target_rsi:
                             row_dict['RSI'] = round(rsi_val, 1)
                             final_results.append(row_dict)
-                except: pass
+                    else:
+                        # 차트 데이터를 못 가져와도, 다이렉트 스캔이거나 RSI 필터를 안 쓴다면 목록에서 누락시키지 않음
+                        if direct_scan_button or not st.session_state.use_rsi:
+                            row_dict['RSI'] = 0.0
+                            final_results.append(row_dict)
+                except:
+                    if direct_scan_button or not st.session_state.use_rsi:
+                        row_dict['RSI'] = 0.0
+                        final_results.append(row_dict)
+                        
                 progress_bar2.progress((idx + 1) / total_survivors, text=f"{progress_text2} ({idx+1}/{total_survivors})")
             
             progress_bar2.empty()
-            if final_results: st.session_state.scanned_data = pd.DataFrame(final_results).sort_values(by='ROE', ascending=False)
-            else: st.session_state.scanned_data = pd.DataFrame()
+            
+            if final_results: 
+                st.session_state.scanned_data = pd.DataFrame(final_results).sort_values(by='ROE', ascending=False)
+            else: 
+                st.session_state.scanned_data = pd.DataFrame()
+                st.warning("⚠️ 네이버 금융 서버가 차트 데이터(RSI) 요청을 일시적으로 차단하여 결과가 모두 필터링되었습니다. '최대 RSI 적용' 필터를 끄고 다시 시도하시거나 잠시 후 쾌속 스캔을 이용해 보세요!")
 
 # --- [메인 화면 출력: 탭(Tab) 기반 UI 레이아웃] ---
 if st.session_state.scanned_data is not None and not st.session_state.scanned_data.empty:
@@ -353,13 +378,6 @@ if st.session_state.scanned_data is not None and not st.session_state.scanned_da
         display_cols = ['Code', 'Name', '업종', '시가총액(억)', '현재가', 'PER', 'PBR', 'ROE', '부채비율(%)', '영업이익(억)', '유보율(%)']
         if 'RSI' in display_df.columns: display_cols.append('RSI')
         
-        # [긴급 방어막] 메모리에 옛날 데이터가 남아있어 충돌하는 것을 자동 복구
-        missing_cols = [col for col in display_cols if col not in display_df.columns]
-        if missing_cols:
-            st.warning("🔄 지표 업데이트(유보율)가 감지되어 충돌 방지를 위해 캐시를 초기화했습니다! 왼쪽의 [🎯 스캐너 가동] 버튼을 한 번만 더 눌러주세요.")
-            st.session_state.scanned_data = None
-            st.stop()
-            
         st.dataframe(display_df[display_cols], use_container_width=True, hide_index=True)
         
         csv = convert_df_to_csv(display_df[display_cols])
@@ -457,7 +475,7 @@ if st.session_state.scanned_data is not None and not st.session_state.scanned_da
                         '① 이평선': cur_trend, '② MACD': cur_macd, 
                         '③ 수급': money_sig, '④ 방어율(눌림)': dd_signal, 
                         '⑤ 거래량': vol_sig, '⑥ 캔들': candle_sig, '⑦ 볼린저': bb_sig,
-                        '⑧ 현금(유보)': reserve_sig, '⑨ 모멘텀': momentum_sig 
+                        '⑧ 현금(유보)': reserve_sig, '⑨ 모멘텀': momentum_sig # [완벽 교체] ⑧ 신용(빚) 흔적 완전 제거!
                     })
                     
                     periods = [("3개월 전", -60), ("6개월 전", -120), ("1년 전", -250)]
