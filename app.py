@@ -41,8 +41,9 @@ def get_krx_data():
             for page in range(1, 25): 
                 url = f"https://finance.naver.com/sise/sise_market_sum.naver?sosok={sosok}&page={page}"
                 res = requests.get(url, headers={'User-agent': 'Mozilla/5.0'})
-                res.encoding = 'euc-kr' # [버그 수정] 한글 깨짐 방지
-                soup = BeautifulSoup(res.text, 'html.parser')
+                # [버그 수정] 모르는 글자가 나와도 무시하고 진행하도록 궁극의 방어막 적용
+                html_text = res.content.decode('cp949', 'ignore') 
+                soup = BeautifulSoup(html_text, 'html.parser')
                 table = soup.find('table', {'class': 'type_2'})
                 if not table: continue
                 for row in table.find_all('tr'):
@@ -138,8 +139,8 @@ def check_smart_money(code):
     try:
         url = f"https://finance.naver.com/item/frgn.naver?code={code}"
         res = requests.get(url, headers={'User-agent': 'Mozilla/5.0'})
-        res.encoding = 'euc-kr' # [버그 수정] 한글 깨짐 방지
-        dfs = pd.read_html(io.StringIO(res.text), match='날짜')
+        html_text = res.content.decode('cp949', 'ignore') # 깨짐 방어막
+        dfs = pd.read_html(io.StringIO(html_text), match='날짜')
         df_frgn = dfs[0].dropna(subset=['날짜'])
         recent_5 = df_frgn.head(5)
         inst_sum = pd.to_numeric(recent_5.iloc[:, 5].astype(str).str.replace(',', ''), errors='coerce').sum()
@@ -161,7 +162,6 @@ if 'min_price' not in st.session_state: st.session_state.min_price = 2000
 if 'scanned_data' not in st.session_state: st.session_state.scanned_data = None 
 if 'watchlist' not in st.session_state: st.session_state.watchlist = [] 
 
-# [신규 추가] 탭 이동 시에도 2번 탭의 정밀비교 데이터가 증발하지 않도록 영구 보존
 if 'compare_results' not in st.session_state: st.session_state.compare_results = None
 if 'backtest_results' not in st.session_state: st.session_state.backtest_results = None
 if 'scan_time_kst' not in st.session_state: st.session_state.scan_time_kst = ""
@@ -232,10 +232,9 @@ except:
 
 if scan_button or direct_scan_button:
     st.session_state.scanned_data = None 
-    st.session_state.compare_results = None # 새 스캔 시 2번 탭 데이터도 초기화
+    st.session_state.compare_results = None 
     st.session_state.backtest_results = None
     
-    # 스캔 버튼을 누른 바로 그 시점의 시간을 저장
     st.session_state.scan_time_kst = (datetime.utcnow() + timedelta(hours=9)).strftime('%Y년 %m월 %d일 %H:%M:%S')
 
     df_krx = get_krx_data()
@@ -265,24 +264,37 @@ if scan_button or direct_scan_button:
             url = f"https://finance.naver.com/item/main.naver?code={code}" 
             try:
                 res = requests.get(url, headers={'User-agent': 'Mozilla/5.0'})
-                res.encoding = 'euc-kr' # [버그 수정] 한글 깨짐 방지
-                soup = BeautifulSoup(res.text, 'html.parser')
+                # [핵심 수정] 에러가 나도 무시하고(ignore) 텍스트를 강제 추출하여 루프 멈춤 방지
+                html_text = res.content.decode('cp949', 'ignore') 
+                soup = BeautifulSoup(html_text, 'html.parser')
+                
                 per = safe_float(soup.select_one('#_per').text if soup.select_one('#_per') else "0")
                 pbr = safe_float(soup.select_one('#_pbr').text if soup.select_one('#_pbr') else "0")
                 dvr = safe_float(soup.select_one('#_dvr').text if soup.select_one('#_dvr') else "0")
                 roe = (pbr / per) * 100 if per > 0 else 0.0
                 debt_ratio = get_recent_fin_value(soup, '부채비율')
                 op_profit = get_recent_fin_value(soup, '영업이익')
-                current_price = getattr(row, 'Price', int(row.Marcap / float(row.Stocks)) if getattr(row, 'Stocks', 0) else 0)
+                
+                # [안전장치 추가] 현재가를 HTML에서 더 정확하게 긁어오기
+                price_tag = soup.select_one('.no_today .blind')
+                if price_tag:
+                    current_price = safe_float(price_tag.text)
+                else:
+                    try: current_price = int(float(row.Marcap) / float(row.Stocks)) if float(getattr(row, 'Stocks', 0)) else 0
+                    except: current_price = 0
                 
                 credit_ratio = get_credit_ratio(soup)
                 
+                try: marcap_val = int(float(row.Marcap) // 100000000)
+                except: marcap_val = 0
+                
                 fin_results.append({
-                    'Code': code, 'Name': row.Name, '업종': row.Sector, '시가총액(억)': int(row.Marcap // 100000000), '현재가': current_price,
+                    'Code': code, 'Name': row.Name, '업종': row.Sector, '시가총액(억)': marcap_val, '현재가': current_price,
                     'PER': round(per, 2), 'PBR': round(pbr, 2), 'ROE': round(roe, 2),
                     '부채비율(%)': round(debt_ratio, 2), '영업이익(억)': op_profit, '배당(%)': dvr, '신용비율(%)': credit_ratio
                 })
-            except: pass 
+            except Exception as e: 
+                pass 
             progress_bar.progress((idx + 1) / total_stocks, text=f"{progress_text} ({idx+1}/{total_stocks} 완료)")
         
         progress_bar.empty()
@@ -373,7 +385,7 @@ if st.session_state.scanned_data is not None and not st.session_state.scanned_da
                     
                     inst_sum, frgn_sum = check_smart_money(code)
                     if inst_sum > 0 and frgn_sum > 0: money_sig = "🔥 양매수"
-                    elif inst_sum > 0: money_sig = "🟢 기관 매수"
+                    elif inst_sum > 0: money_sig = "🟢 기관 매 매수"
                     elif frgn_sum > 0: money_sig = "🟢 외인 매수"
                     else: money_sig = "🔴 수급 이탈"
 
@@ -459,12 +471,10 @@ if st.session_state.scanned_data is not None and not st.session_state.scanned_da
                             '현재 수익률': ret_str, '당시 이평선': trend_past, '당시 MACD': macd_past
                         })
                     
-                # 분석이 끝나면 결과값을 세션 스탯(단기 기억장치)에 영구 저장
                 if compare_results:
                     st.session_state.compare_results = compare_results
                     st.session_state.backtest_results = backtest_results
 
-        # 버튼을 다시 누르지 않아도, 기억장치에 저장된 표가 있으면 화면에 계속 띄워줌
         if st.session_state.compare_results:
             st.dataframe(pd.DataFrame(st.session_state.compare_results), use_container_width=True, hide_index=True)
             st.markdown("---")
