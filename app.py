@@ -199,7 +199,7 @@ st.session_state.watchlist = st.sidebar.multiselect("장바구니 (검색하여 
 direct_scan_button = st.sidebar.button("🚀 선택 종목 다이렉트 분석 (1초)", type="primary", use_container_width=True)
 
 # --- [메인 화면 로직: 매크로 풍향계 & 스캔] ---
-st.title("📈 AI 주식 발굴 및 심층 분석 시스템")
+st.title("📈 AI  심층 분석 시스템")
 
 current_time_kst = (datetime.utcnow() + timedelta(hours=9)).strftime('%Y년 %m월 %d일 %H:%M:%S')
 
