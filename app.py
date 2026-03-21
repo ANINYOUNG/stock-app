@@ -429,4 +429,164 @@ if st.session_state.scanned_data is not None and not st.session_state.scanned_da
                         '⑤ 캔들': candle_sig, '⑥ 볼린저': bb_sig, '⑦ 모멘텀': momentum_sig
                     })
                     
-                    periods = [("3개월 전", -60), ("6개월
+                    periods = [("3개월 전", -60), ("6개월 전", -120), ("1년 전", -250)]
+                    for period_name, idx in periods:
+                        if len(df_price) >= abs(idx):
+                            price_past = df_price['Close'].iloc[idx]
+                            price_past_str = f"{int(price_past):,}원"
+                            ret = ((current_price - price_past) / price_past) * 100
+                            ret_str = f"📈 +{ret:.1f}%" if ret > 0 else f"📉 {ret:.1f}%"
+                            trend_past, macd_past = get_historical_signals(idx)
+                        else:
+                            price_past_str, ret_str, trend_past, macd_past = "-", "상장기간 부족", "-", "-"
+                            
+                        backtest_results.append({
+                            '종목명': name, '투자 시점': period_name, '당시 주가': price_past_str,
+                            '현재 수익률': ret_str, '당시 이평선': trend_past, '당시 MACD': macd_past
+                        })
+                
+                if compare_results:
+                    st.session_state.compare_results_df = pd.DataFrame(compare_results)
+                    st.session_state.backtest_results_df = pd.DataFrame(backtest_results)
+
+        if st.session_state.compare_results_df is not None and not st.session_state.compare_results_df.empty:
+            st.dataframe(st.session_state.compare_results_df, use_container_width=True, hide_index=True)
+            st.markdown("---")
+            st.subheader("⏪ 미니 백테스팅 (과거 매수 시점의 주가와 수익률)")
+            st.dataframe(st.session_state.backtest_results_df, use_container_width=True, hide_index=True)
+
+    # --- 탭 3: AI 리포트 및 💬 실시간 채팅 꼬리 질문 (신규 기능) ---
+    with tab3:
+        target_name = st.selectbox("리포트를 생성할 최종 타겟 종목 1개를 선택하세요", final_df['Name'].tolist())
+        target_code = final_df[final_df['Name'] == target_name]['Code'].values[0]
+        
+        # 💡 사용자가 종목을 바꿨다면 이전 종목의 채팅 기록을 싹 비워줍니다. (혼선 방지)
+        if st.session_state.current_target_code != target_code:
+            st.session_state.chat_history = []
+            st.session_state.current_target_code = target_code
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            report_btn = st.button(f"📝 {target_name} AI 리포트 생성 (또는 채팅 초기화)", use_container_width=True)
+        with col2:
+            naver_url = f"https://stock.naver.com/domestic/stock/{target_code}/price"
+            st.link_button(f"🔴 {target_name} 실시간 호가창 보기 (새 창)", naver_url, use_container_width=True)
+        
+        if report_btn:
+            # 버튼을 누를 때마다 이전 대화 기록을 깔끔하게 지우고 새롭게 시작합니다.
+            st.session_state.chat_history = []
+            
+            with st.status(f"{target_name} AI 리포트 작성 중... (거시경제, 리스크, 52주 모멘텀 분석 포함)", expanded=True) as status:
+                try:
+                    row = final_df[final_df['Name'] == target_name].iloc[0]
+                    df_target = fdr.DataReader(target_code).tail(120)
+                    cur_price = df_target['Close'].iloc[-1]
+                    cur_vol = df_target['Volume'].iloc[-1]
+                    
+                    avg_vol_20 = df_target['Volume'].rolling(window=20).mean().iloc[-2] if len(df_target) >= 20 else 0
+                    vol_ratio = (cur_vol / avg_vol_20) * 100 if avg_vol_20 > 0 else 0
+                    high_52w = df_target['High'].max()
+                    
+                    ma20 = df_target['Close'].rolling(window=20).mean().iloc[-1]
+                    ma60 = df_target['Close'].rolling(window=60).mean().iloc[-1]
+                    ma120 = df_target['Close'].rolling(window=120).mean().iloc[-1]
+                    trend_state = "정배열(상승추세)" if ma20 > ma60 > ma120 else ("역배열(하락추세)" if ma20 < ma60 < ma120 else "혼조세")
+                    
+                    exp1 = df_target['Close'].ewm(span=12, adjust=False).mean()
+                    exp2 = df_target['Close'].ewm(span=26, adjust=False).mean()
+                    macd_s = exp1 - exp2
+                    sig_s = macd_s.ewm(span=9, adjust=False).mean()
+                    
+                    if len(macd_s) >= 2:
+                        m_cur, s_cur = macd_s.iloc[-1], sig_s.iloc[-1]
+                        m_prev, s_prev = macd_s.iloc[-2], sig_s.iloc[-2]
+                        if m_prev <= s_prev and m_cur > s_cur: macd_state = f"골든크로스 발생 (M:{m_cur:.0f} > S:{s_cur:.0f})"
+                        elif m_prev >= s_prev and m_cur < s_cur: macd_state = f"데드크로스 발생 (M:{m_cur:.0f} < S:{s_cur:.0f})"
+                        elif m_cur > s_cur: macd_state = f"매수우위 (M:{m_cur:.0f} > S:{s_cur:.0f})"
+                        else: macd_state = f"매도우위 (M:{m_cur:.0f} < S:{s_cur:.0f})"
+                    else:
+                        macd_state = "데이터 부족"
+                        
+                    rsi_val = calculate_rsi(df_target).iloc[-1]
+                    candle_state = detect_candle_pattern(df_target)
+
+                    if len(df_target) >= 20:
+                        std20 = df_target['Close'].rolling(window=20).std().iloc[-1]
+                        upper_band, lower_band = ma20 + (std20 * 2), ma20 - (std20 * 2)
+                        bandwidth = (upper_band - lower_band) / ma20 if ma20 > 0 else 0
+                        if cur_price <= lower_band * 1.02: bb_state = "하한선 터치 (통계적 과매도, 반등 지지선 부근)"
+                        elif cur_price >= upper_band * 0.98: bb_state = "상한선 터치 (통계적 과매수, 저항선 부근)"
+                        elif bandwidth < 0.10: bb_state = "밴드 수축/스퀴즈 (에너지 응축 중, 큰 변동성 예상)"
+                        else: bb_state = "밴드 중심부 순항 중"
+                    else: bb_state = "데이터 부족"
+                    
+                    breakout_ratio = (cur_price / high_52w) * 100 if high_52w > 0 else 0
+                    if breakout_ratio >= 98: momentum_state = "52주 신고가 돌파 (강한 상승 모멘텀)"
+                    elif breakout_ratio >= 90: momentum_state = "52주 신고가 근접 (돌파 시도 중)"
+                    else: momentum_state = "박스권 하단 혹은 하락 추세 중"
+
+                    df_kospi = fdr.DataReader('KS11').tail(20)
+                    kospi_state = "강세장" if df_kospi['Close'].iloc[-1] > df_kospi['Close'].mean() else "약세장"
+                    try: df_usd = fdr.DataReader('USD/KRW').tail(1); usd_krw = df_usd['Close'].iloc[0]
+                    except: usd_krw = "데이터 없음"
+
+                    dividend = row.get('배당(%)', 0.0)
+                    
+                    report_data = f"""
+                    [종목 정보] {target_name} (코드: {target_code})
+                    [재무/가치] PER: {row['PER']}배, PBR: {row['PBR']}배, ROE: {row['ROE']}%, 부채비율: {row['부채비율(%)']}%, 시가총액: {row['시가총액(억)']}억원, 최근 영업이익: {row['영업이익(억)']}억원
+                    [기술 분석] 현재가: {cur_price:,}원, 52주 최고가: {high_52w:,}원, 이평선 추세: {trend_state}, MACD: {macd_state}, RSI(14): {rsi_val:.1f}
+                    [볼린저 밴드] 현재 위치: {bb_state}
+                    [캔들 패턴] 오늘의 캔들: {candle_state}
+                    [거래량 변동] 금일 거래량: {cur_vol:,}주, 20일 평균 거래량 대비 {vol_ratio:.1f}% 수준
+                    [모멘텀/리스크] 52주 신고가 상태: {momentum_state}
+                    [거버넌스] 시가배당률: {dividend}%
+                    [매크로] 코스피 시장 상태: {kospi_state}, 원/달러 환율: {usd_krw}원
+                    """
+                    
+                    prompt = f"""
+                    당신은 프랍 트레이딩 펌의 수석 애널리스트입니다. 제공된 데이터를 바탕으로 14개 항목 투자 리포트를 작성하라. 
+                    제공된 데이터가 있다면 막연한 소리 대신 해당 숫자를 반드시 인용하여 분석할 것.
+                    제공된 데이터: {report_data}
+                    항목: 1.요약 2.개요 3.재무분석 4.밸류에이션 5.산업/경쟁 6.기술분석(이평선, 거래량, 볼린저밴드, 캔들, 52주 모멘텀 의미 반드시 포함) 7.거버넌스 8.매크로 9.리스크 10.베어케이스 11.시나리오 12.점수산출 13.최종판단 14.출처(네이버 금융 명시)
+                    """
+                    
+                    response = model.generate_content(prompt)
+                    
+                    # 💡 채팅 기록에 시스템 프롬프트(비밀 기억)와 첫 리포트를 저장합니다.
+                    st.session_state.chat_history = [
+                        {"role": "user", "parts": [prompt]}, 
+                        {"role": "model", "parts": [response.text]}
+                    ]
+                    
+                    status.update(label="분석 완료!", state="complete", expanded=False)
+                except Exception as e:
+                    st.error(f"리포트 생성 중 에러 발생: {e}")
+
+        # 💡 리포트가 한 번이라도 생성되어 채팅 기록이 존재한다면 항상 렌더링합니다.
+        if st.session_state.chat_history:
+            st.divider()
+            st.subheader(f"🗣️ {target_name}에 대해 꼬리 질문을 해보세요!")
+            
+            # 이전 채팅 내역 출력 (첫 번째 '시스템 프롬프트'는 숨깁니다)
+            for msg in st.session_state.chat_history[1:]:
+                with st.chat_message("ai" if msg["role"] == "model" else "user"):
+                    st.markdown(msg["parts"][0])
+            
+            # 사용자 채팅 입력창
+            if user_q := st.chat_input(f"{target_name}의 가장 큰 리스크가 뭐야?"):
+                # 1. 사용자 질문을 화면에 띄우고 메모리에 저장
+                with st.chat_message("user"):
+                    st.markdown(user_q)
+                st.session_state.chat_history.append({"role": "user", "parts": [user_q]})
+                
+                # 2. AI의 답변을 받아오고 화면에 띄우기
+                with st.chat_message("ai"):
+                    with st.spinner("AI가 분석 데이터를 되짚어보고 있습니다..."):
+                        # 이전 대화 내역 전체를 AI에게 전달하여 문맥을 기억하게 합니다.
+                        chat = model.start_chat(history=st.session_state.chat_history[:-1])
+                        ans = chat.send_message(user_q)
+                        st.markdown(ans.text)
+                        
+                # 3. AI 답변을 메모리에 저장
+                st.session_state.chat_history.append({"role": "model", "parts": [ans.text]})
