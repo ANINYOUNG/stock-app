@@ -5,7 +5,9 @@ from datetime import datetime, timedelta
 
 # --- [초기 설정 및 API 키 보안 세팅] ---
 st.set_page_config(layout="wide", page_title="AI 퀀트 스캐너 & 애널리스트")
-@@ -121,6 +122,18 @@ def get_recent_fin_value(soup, keyword):
+# ... 이전 코드 ...
+def get_recent_fin_value(soup, keyword):  # 특수 기호 라인을 삭제하고 정상 코드로 복구
+    # ... 나머지 코드 ...
 except: pass
 return 0.0
 
