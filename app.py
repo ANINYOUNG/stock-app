@@ -77,15 +77,6 @@ def calculate_rsi(df, period=14):
     rs = avg_gain / avg_loss
     return 100 - (100 / (1 + rs))
 
-def calculate_macd(df, short=12, long=26, signal=9):
-    if len(df) < long: return 0, 0, 0
-    exp1 = df['Close'].ewm(span=short, adjust=False).mean()
-    exp2 = df['Close'].ewm(span=long, adjust=False).mean()
-    macd = exp1 - exp2
-    signal_line = macd.ewm(span=signal, adjust=False).mean()
-    macd_hist = macd - signal_line
-    return macd.iloc[-1], signal_line.iloc[-1], macd_hist.iloc[-1]
-
 def detect_candle_pattern(df):
     if len(df) < 2: return "데이터 부족"
     today, yest = df.iloc[-1], df.iloc[-2]
@@ -144,31 +135,19 @@ if 'use_debt' not in st.session_state: st.session_state.use_debt = True
 if 'use_op' not in st.session_state: st.session_state.use_op = True 
 if 'use_rsi' not in st.session_state: st.session_state.use_rsi = True
 if 'use_min_price' not in st.session_state: st.session_state.use_min_price = True 
-
-# 💡 신규 기능: 거래량 폭발 체크박스 기억 장치
 if 'use_vol_surge' not in st.session_state: st.session_state.use_vol_surge = False
 
-# 탭 2의 정밀 비교 결과를 저장할 '기억 공간'
 if 'compare_results_df' not in st.session_state: st.session_state.compare_results_df = None
 if 'backtest_results_df' not in st.session_state: st.session_state.backtest_results_df = None
-
-# 💡 신규 기능: AI 채팅 꼬리 질문 기억 장치
 if 'chat_history' not in st.session_state: st.session_state.chat_history = []
 if 'current_target_code' not in st.session_state: st.session_state.current_target_code = None
 
-
-# --- [사이드바: 종목 선별 기준] ---
+# --- [사이드바: 종목 선별 기준 및 AI] ---
 st.sidebar.header("🔍 1~3단계: 전체 시장 스캔 필터")
 
-with st.sidebar.expander("❓ 용어 및 분석 지표 설명"):
-    st.caption("✅ **PER/PBR/ROE**: 가치평가의 기본 3요소")
-    st.caption("📈 **MACD/RSI/볼린저/캔들**: 차트 바닥(반등) 타점 판독")
-    st.caption("🦅 **52주 모멘텀**: 고점 돌파를 시도하는 강한 주도주 판독")
-
-# 💡 신규 기능 1: 검색 범위 확장 (하위 50%, 전체 종목 추가)
 scan_option = st.sidebar.selectbox(
     "검사할 종목 범위", 
-    ["시총 상위 100개", "시총 상위 500개", "시총 상위 1000개", "시총 하위 50% (소형주)", "전체 종목 (약 2500개 - 오래걸림)"], 
+    ["시총 상위 100개", "시총 상위 500개", "시총 상위 1000개", "시총 하위 50% (소형주)", "전체 종목 (약 2500개 - 최대 15분)"], 
     index=0
 )
 
@@ -180,18 +159,14 @@ excluded_sectors = st.sidebar.multiselect("🚫 제외할 업종 (가치 트랩 
 
 st.sidebar.divider()
 
-# 💡 신규 기능 2: 필터 전체 선택 / 해제 버튼
 col1, col2 = st.sidebar.columns(2)
 filter_keys = ['use_marcap', 'use_min_price', 'use_per', 'use_pbr', 'use_roe', 'use_debt', 'use_op', 'use_rsi', 'use_vol_surge']
 
 if col1.button("✅ 필터 모두 켜기", use_container_width=True):
-    for key in filter_keys:
-        st.session_state[key] = True
+    for key in filter_keys: st.session_state[key] = True
     st.rerun()
-
 if col2.button("❌ 필터 모두 끄기", use_container_width=True):
-    for key in filter_keys:
-        st.session_state[key] = False
+    for key in filter_keys: st.session_state[key] = False
     st.rerun()
 
 with st.sidebar.expander("⚙️ 세부 재무/가격 필터 설정 (클릭하여 열기)"):
@@ -217,7 +192,22 @@ scan_button = st.sidebar.button("🎯 전체 시장 스캐너 가동", type="pri
 st.sidebar.divider()
 st.sidebar.header("⚡ 4단계: 관심종목 쾌속 스캔")
 st.session_state.watchlist = st.sidebar.multiselect("장바구니 (검색하여 추가)", options=df_krx_full['Name'].tolist(), default=st.session_state.watchlist)
-direct_scan_button = st.sidebar.button("🚀 선택 종목 다이렉트 분석 (1초)", type="primary", use_container_width=True)
+direct_scan_button = st.sidebar.button("🚀 선택 종목 다이렉트 분석", use_container_width=True)
+
+# 💡 신규 기능: 사이드바 AI 용어 사전 탑재
+st.sidebar.divider()
+st.sidebar.subheader("🤖 미니 AI 용어 사전")
+st.sidebar.caption("투자가 어렵나요? 어려운 금융 용어를 초보자 눈높이에서 아주 쉽게 비유해서 설명해 드립니다.")
+term_query = st.sidebar.text_input("질문 입력 (예: 골든크로스가 뭐야?)")
+
+if term_query:
+    with st.sidebar.spinner("AI가 알기 쉽게 설명 중..."):
+        try:
+            prompt = f"당신은 친절한 주식 멘토입니다. 초보 주식 투자자가 '{term_query}'에 대해 질문했습니다. 전문 용어를 최소화하고, 일상 생활의 비유를 들어서 3~4문장으로 아주 쉽게 설명해 주세요."
+            term_ans = model.generate_content(prompt)
+            st.sidebar.info(term_ans.text)
+        except Exception as e:
+            st.sidebar.error("설명을 불러오는데 실패했습니다.")
 
 # --- [메인 화면 로직: 매크로 풍향계 & 스캔] ---
 st.title("📈 AI 심층 분석 시스템")
@@ -232,8 +222,7 @@ try:
         st.success(f"🧭 **오늘의 시장 풍향계:** 🟢 강세장 (코스피 20일선 돌파 유지 중) | 현재가: {cur_kospi:,.2f}pt\n\n💡 **AI 전략 조언:** 시장에 돈이 돌고 있습니다. RSI 70 이하의 정배열 우량주를 적극적으로 공략하세요!")
     else:
         st.error(f"🧭 **오늘의 시장 풍향계:** 🔴 약세장 (코스피 20일선 이탈) | 현재가: {cur_kospi:,.2f}pt\n\n💡 **AI 전략 조언:** 시장이 조정을 받고 있습니다. 가치평가(S-RIM) 대비 매우 저렴하고 하락방어율이 좋은 종목만 보수적으로 접근하세요.")
-except:
-    pass
+except: pass
 
 if scan_button or direct_scan_button:
     st.session_state.scanned_data = None 
@@ -251,23 +240,17 @@ if scan_button or direct_scan_button:
         with st.spinner('1차: 선택한 범위의 종목을 로드 중입니다...'):
             if excluded_sectors: df_krx = df_krx[~df_krx['Sector'].isin(excluded_sectors)]
             
-            # 💡 신규 기능 1: 선택한 범위에 따라 데이터를 자르는 마법의 로직
-            df_krx = df_krx.sort_values('Marcap', ascending=False) # 시총 순으로 줄 세우기
+            df_krx = df_krx.sort_values('Marcap', ascending=False)
             total_count = len(df_krx)
             
-            if scan_option == "시총 상위 100개":
-                filtered_by_cap = df_krx.head(100)
-            elif scan_option == "시총 상위 500개":
-                filtered_by_cap = df_krx.head(500)
-            elif scan_option == "시총 상위 1000개":
-                filtered_by_cap = df_krx.head(1000)
+            if scan_option == "시총 상위 100개": filtered_by_cap = df_krx.head(100)
+            elif scan_option == "시총 상위 500개": filtered_by_cap = df_krx.head(500)
+            elif scan_option == "시총 상위 1000개": filtered_by_cap = df_krx.head(1000)
             elif scan_option == "시총 하위 50% (소형주)":
                 half_idx = total_count // 2
-                filtered_by_cap = df_krx.iloc[half_idx:] # 절반 밑으로만 가져오기
-            else: # 전체 종목
-                filtered_by_cap = df_krx
+                filtered_by_cap = df_krx.iloc[half_idx:] 
+            else: filtered_by_cap = df_krx
 
-            # 최소 시총 필터가 켜져있다면 한 번 더 걸러줍니다.
             if st.session_state.use_marcap:
                 min_marcap_won = st.session_state.min_marcap * 100000000
                 filtered_by_cap = filtered_by_cap[filtered_by_cap['Marcap'] >= min_marcap_won]
@@ -327,26 +310,29 @@ if scan_button or direct_scan_button:
             
             for idx, row_dict in enumerate(survivors_records):
                 try:
-                    df_price = fdr.DataReader(row_dict['Code']).tail(40) 
+                    # 💡 수정됨: 최근 40일 -> 250일(1년, 52주) 데이터 확보로 변경
+                    df_price = fdr.DataReader(row_dict['Code']).tail(250) 
                     if not df_price.empty:
-                        # 💡 신규 기능: 거래량 폭발 여부 확인 로직
+                        # 52주 최고/최저가 계산
+                        high_52w = df_price['High'].max()
+                        low_52w = df_price['Low'].min()
+                        
                         if len(df_price) >= 20:
                             avg_vol_20 = df_price['Volume'].rolling(window=20).mean().iloc[-2]
                             cur_vol = df_price['Volume'].iloc[-1]
                             vol_ratio = (cur_vol / avg_vol_20) * 100 if avg_vol_20 > 0 else 0
-                        else:
-                            vol_ratio = 0
+                        else: vol_ratio = 0
                         
-                        # 거래량 급증 체크박스가 켜져있고, 비율이 200% 미만이면 탈락!
                         pass_vol_check = True
-                        if st.session_state.use_vol_surge and vol_ratio < 200:
-                            pass_vol_check = False
+                        if st.session_state.use_vol_surge and vol_ratio < 200: pass_vol_check = False
                         
                         if pass_vol_check:
                             rsi_val = calculate_rsi(df_price).iloc[-1]
                             if direct_scan_button or not st.session_state.use_rsi or rsi_val <= st.session_state.target_rsi:
                                 row_dict['RSI'] = round(rsi_val, 1)
-                                row_dict['거래량(%)'] = f"{int(vol_ratio)}%" # 표에 추가로 보여줍니다
+                                row_dict['거래량(%)'] = f"{int(vol_ratio)}%" 
+                                row_dict['52주 최고'] = int(high_52w) # 💡 표에 들어갈 데이터 추가
+                                row_dict['52주 최저'] = int(low_52w)  # 💡 표에 들어갈 데이터 추가
                                 final_results.append(row_dict)
                 except: pass
                 progress_bar2.progress((idx + 1) / total_survivors, text=f"{progress_text2} ({idx+1}/{total_survivors})")
@@ -370,16 +356,18 @@ if st.session_state.scanned_data is not None and not st.session_state.scanned_da
         display_df['시가총액(억)'] = display_df['시가총액(억)'].apply(lambda x: f"{x:,}")
         display_df['영업이익(억)'] = display_df['영업이익(억)'].apply(lambda x: f"{int(x):,}") 
         display_df['현재가'] = display_df['현재가'].apply(lambda x: f"{int(x):,}") 
+        display_df['52주 최고'] = display_df['52주 최고'].apply(lambda x: f"{int(x):,}") 
+        display_df['52주 최저'] = display_df['52주 최저'].apply(lambda x: f"{int(x):,}") 
         
-        display_cols = ['Code', 'Name', '업종', '시가총액(억)', '현재가', 'PER', 'PBR', 'ROE', '부채비율(%)', '영업이익(억)']
+        display_cols = ['Code', 'Name', '업종', '시가총액(억)', '현재가', '52주 최저', '52주 최고', 'PER', 'PBR', 'ROE', '부채비율(%)', '영업이익(억)']
         if 'RSI' in display_df.columns: display_cols.append('RSI')
-        if '거래량(%)' in display_df.columns: display_cols.append('거래량(%)') # 💡 거래량 표시 추가
+        if '거래량(%)' in display_df.columns: display_cols.append('거래량(%)') 
         st.dataframe(display_df[display_cols], use_container_width=True, hide_index=True)
         
         csv = convert_df_to_csv(display_df[display_cols])
         st.download_button(label="📥 엑셀(CSV)로 리스트 다운로드", data=csv, file_name='quant_watchlist.csv', mime='text/csv')
     
-    # --- 탭 2: 정밀 분석 대시보드 (기존과 동일 생략 없이 유지) ---
+    # --- 탭 2: 정밀 분석 대시보드 ---
     with tab2:
         st.info("💡 종목을 선택하여 볼린저밴드, 52주 신고가 모멘텀 등을 한눈에 비교하세요.")
         selected_names = st.multiselect("비교할 종목들을 선택하세요", final_df['Name'].tolist(), default=final_df['Name'].tolist()[:3])
@@ -492,12 +480,11 @@ if st.session_state.scanned_data is not None and not st.session_state.scanned_da
             st.subheader("⏪ 미니 백테스팅 (과거 매수 시점의 주가와 수익률)")
             st.dataframe(st.session_state.backtest_results_df, use_container_width=True, hide_index=True)
 
-    # --- 탭 3: AI 리포트 및 💬 실시간 채팅 꼬리 질문 (신규 기능) ---
+    # --- 탭 3: AI 리포트 및 채팅 ---
     with tab3:
         target_name = st.selectbox("리포트를 생성할 최종 타겟 종목 1개를 선택하세요", final_df['Name'].tolist())
         target_code = final_df[final_df['Name'] == target_name]['Code'].values[0]
         
-        # 💡 사용자가 종목을 바꿨다면 이전 종목의 채팅 기록을 싹 비워줍니다. (혼선 방지)
         if st.session_state.current_target_code != target_code:
             st.session_state.chat_history = []
             st.session_state.current_target_code = target_code
@@ -510,19 +497,22 @@ if st.session_state.scanned_data is not None and not st.session_state.scanned_da
             st.link_button(f"🔴 {target_name} 실시간 호가창 보기 (새 창)", naver_url, use_container_width=True)
         
         if report_btn:
-            # 버튼을 누를 때마다 이전 대화 기록을 깔끔하게 지우고 새롭게 시작합니다.
             st.session_state.chat_history = []
             
             with st.status(f"{target_name} AI 리포트 작성 중... (거시경제, 리스크, 52주 모멘텀 분석 포함)", expanded=True) as status:
                 try:
                     row = final_df[final_df['Name'] == target_name].iloc[0]
-                    df_target = fdr.DataReader(target_code).tail(120)
+                    # 💡 수정됨: AI 리포트 분석용 데이터도 정확히 250일(52주)치를 가져오도록 수정
+                    df_target = fdr.DataReader(target_code).tail(250)
                     cur_price = df_target['Close'].iloc[-1]
                     cur_vol = df_target['Volume'].iloc[-1]
                     
                     avg_vol_20 = df_target['Volume'].rolling(window=20).mean().iloc[-2] if len(df_target) >= 20 else 0
                     vol_ratio = (cur_vol / avg_vol_20) * 100 if avg_vol_20 > 0 else 0
+                    
+                    # 💡 52주 최고가 / 최저가 산출 로직 완벽 연동
                     high_52w = df_target['High'].max()
+                    low_52w = df_target['Low'].min()
                     
                     ma20 = df_target['Close'].rolling(window=20).mean().iloc[-1]
                     ma60 = df_target['Close'].rolling(window=60).mean().iloc[-1]
@@ -572,25 +562,25 @@ if st.session_state.scanned_data is not None and not st.session_state.scanned_da
                     report_data = f"""
                     [종목 정보] {target_name} (코드: {target_code})
                     [재무/가치] PER: {row['PER']}배, PBR: {row['PBR']}배, ROE: {row['ROE']}%, 부채비율: {row['부채비율(%)']}%, 시가총액: {row['시가총액(억)']}억원, 최근 영업이익: {row['영업이익(억)']}억원
-                    [기술 분석] 현재가: {cur_price:,}원, 52주 최고가: {high_52w:,}원, 이평선 추세: {trend_state}, MACD: {macd_state}, RSI(14): {rsi_val:.1f}
+                    [기술 분석] 현재가: {cur_price:,}원, 52주 최고가: {high_52w:,}원, 52주 최저가: {low_52w:,}원, 이평선 추세: {trend_state}, MACD: {macd_state}, RSI(14): {rsi_val:.1f}
                     [볼린저 밴드] 현재 위치: {bb_state}
                     [캔들 패턴] 오늘의 캔들: {candle_state}
                     [거래량 변동] 금일 거래량: {cur_vol:,}주, 20일 평균 거래량 대비 {vol_ratio:.1f}% 수준
-                    [모멘텀/리스크] 52주 신고가 상태: {momentum_state}
+                    [모멘텀/리스크] 52주 신고가/신저가 모멘텀 상태: {momentum_state}
                     [거버넌스] 시가배당률: {dividend}%
                     [매크로] 코스피 시장 상태: {kospi_state}, 원/달러 환율: {usd_krw}원
                     """
                     
                     prompt = f"""
                     당신은 프랍 트레이딩 펌의 수석 애널리스트입니다. 제공된 데이터를 바탕으로 14개 항목 투자 리포트를 작성하라. 
-                    제공된 데이터가 있다면 막연한 소리 대신 해당 숫자를 반드시 인용하여 분석할 것.
+                    제공된 데이터가 있다면 막연한 소리 대신 해당 숫자를 반드시 인용하여 분석할 것. 
+                    (특히 52주 신고가, 52주 신저가 위치 대비 현재 주가의 리스크와 기회를 꼭 언급할 것)
                     제공된 데이터: {report_data}
                     항목: 1.요약 2.개요 3.재무분석 4.밸류에이션 5.산업/경쟁 6.기술분석(이평선, 거래량, 볼린저밴드, 캔들, 52주 모멘텀 의미 반드시 포함) 7.거버넌스 8.매크로 9.리스크 10.베어케이스 11.시나리오 12.점수산출 13.최종판단 14.출처(네이버 금융 명시)
                     """
                     
                     response = model.generate_content(prompt)
                     
-                    # 💡 채팅 기록에 시스템 프롬프트(비밀 기억)와 첫 리포트를 저장합니다.
                     st.session_state.chat_history = [
                         {"role": "user", "parts": [prompt]}, 
                         {"role": "model", "parts": [response.text]}
@@ -600,30 +590,23 @@ if st.session_state.scanned_data is not None and not st.session_state.scanned_da
                 except Exception as e:
                     st.error(f"리포트 생성 중 에러 발생: {e}")
 
-        # 💡 리포트가 한 번이라도 생성되어 채팅 기록이 존재한다면 항상 렌더링합니다.
         if st.session_state.chat_history:
             st.divider()
             st.subheader(f"🗣️ {target_name}에 대해 꼬리 질문을 해보세요!")
             
-            # 이전 채팅 내역 출력 (첫 번째 '시스템 프롬프트'는 숨깁니다)
             for msg in st.session_state.chat_history[1:]:
                 with st.chat_message("ai" if msg["role"] == "model" else "user"):
                     st.markdown(msg["parts"][0])
             
-            # 사용자 채팅 입력창
             if user_q := st.chat_input(f"{target_name}의 가장 큰 리스크가 뭐야?"):
-                # 1. 사용자 질문을 화면에 띄우고 메모리에 저장
                 with st.chat_message("user"):
                     st.markdown(user_q)
                 st.session_state.chat_history.append({"role": "user", "parts": [user_q]})
                 
-                # 2. AI의 답변을 받아오고 화면에 띄우기
                 with st.chat_message("ai"):
                     with st.spinner("AI가 분석 데이터를 되짚어보고 있습니다..."):
-                        # 이전 대화 내역 전체를 AI에게 전달하여 문맥을 기억하게 합니다.
                         chat = model.start_chat(history=st.session_state.chat_history[:-1])
                         ans = chat.send_message(user_q)
                         st.markdown(ans.text)
                         
-                # 3. AI 답변을 메모리에 저장
                 st.session_state.chat_history.append({"role": "model", "parts": [ans.text]})
