@@ -110,22 +110,23 @@ def safe_float(text):
         return float(text.strip().replace(',', ''))
     except: return 0.0
 
-# [강력하게 수정됨] 부채비율, 영업이익 추출 (HTML 구조에 의존하지 않고 안전하게 값 파싱)
+# [강력하게 수정됨] 부채비율, 영업이익 추출 (정규표현식으로 보이지 않는 특수문자/공백 완벽 회피)
 def get_recent_fin_value(soup, keyword):
     try:
         table = soup.find('div', class_='cop_analysis')
         if not table: 
             table = soup
             
-        for el in table.find_all(['th', 'td']):
-            if keyword in el.get_text():
-                row = el.find_parent('tr')
+        for th in table.find_all('th'):
+            if keyword in th.get_text():
+                row = th.find_parent('tr')
                 if row:
                     tds = row.find_all('td')
                     for td in reversed(tds):
                         val_str = td.get_text(strip=True).replace(',', '')
                         if val_str and val_str not in ['-', 'N/A', '']:
-                            match = re.search(r'-?\d+\.?\d*', val_str)
+                            # 정규식으로 순수 숫자(음수/소수점 포함)만 정확히 매칭
+                            match = re.search(r'[-+]?\d*\.?\d+', val_str)
                             if match:
                                 return float(match.group())
                 break
@@ -253,7 +254,6 @@ if scan_button or direct_scan_button:
                 dvr = safe_float(soup.select_one('#_dvr').text if soup.select_one('#_dvr') else "0")
                 roe = (pbr / per) * 100 if per > 0 else 0.0
                 
-                # HTML 요소 추적 방식 복구 적용됨
                 debt_ratio = get_recent_fin_value(soup, '부채비율')
                 op_profit = get_recent_fin_value(soup, '영업이익')
                 
@@ -396,7 +396,6 @@ if st.session_state.scanned_data is not None and not st.session_state.scanned_da
                         if pd.isna(m_cur) or pd.isna(s_cur): 
                             macd_sig = "알수없음"
                         else:
-                            # 값을 노출하여 교차 여부 검증
                             if m_prev <= s_prev and m_cur > s_cur: 
                                 macd_sig = f"🚀 골든크로스 (M:{m_cur:.0f} > S:{s_cur:.0f})"
                             elif m_prev >= s_prev and m_cur < s_cur: 
@@ -482,7 +481,6 @@ if st.session_state.scanned_data is not None and not st.session_state.scanned_da
                     ma120 = df_target['Close'].rolling(window=120).mean().iloc[-1]
                     trend_state = "정배열(상승추세)" if ma20 > ma60 > ma120 else ("역배열(하락추세)" if ma20 < ma60 < ma120 else "혼조세")
                     
-                    # AI 리포트 MACD 지표값 노출 적용
                     exp1 = df_target['Close'].ewm(span=12, adjust=False).mean()
                     exp2 = df_target['Close'].ewm(span=26, adjust=False).mean()
                     macd_s = exp1 - exp2
