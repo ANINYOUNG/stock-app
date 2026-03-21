@@ -353,15 +353,29 @@ if st.session_state.scanned_data is not None and not st.session_state.scanned_da
     with tab1:
         st.subheader(f"✅ 조건검색 결과 ({len(final_df)}개 발견)")
         display_df = final_df.copy()
-        display_df['시가총액(억)'] = display_df['시가총액(억)'].apply(lambda x: f"{x:,}")
-        display_df['영업이익(억)'] = display_df['영업이익(억)'].apply(lambda x: f"{int(x):,}") 
-        display_df['현재가'] = display_df['현재가'].apply(lambda x: f"{int(x):,}") 
-        display_df['52주 최고'] = display_df['52주 최고'].apply(lambda x: f"{int(x):,}") 
-        display_df['52주 최저'] = display_df['52주 최저'].apply(lambda x: f"{int(x):,}") 
         
-        display_cols = ['Code', 'Name', '업종', '시가총액(억)', '현재가', '52주 최저', '52주 최고', 'PER', 'PBR', 'ROE', '부채비율(%)', '영업이익(억)']
+        # 🛡️ [안전장치 추가] 해당 데이터(컬럼)가 실제로 존재할 때만 콤마(,)를 찍습니다.
+        if '시가총액(억)' in display_df.columns:
+            display_df['시가총액(억)'] = display_df['시가총액(억)'].apply(lambda x: f"{x:,}")
+        if '영업이익(억)' in display_df.columns:
+            display_df['영업이익(억)'] = display_df['영업이익(억)'].apply(lambda x: f"{int(x):,}") 
+        if '현재가' in display_df.columns:
+            display_df['현재가'] = display_df['현재가'].apply(lambda x: f"{int(x):,}") 
+        if '52주 최고' in display_df.columns:
+            display_df['52주 최고'] = display_df['52주 최고'].apply(lambda x: f"{int(x):,}") 
+        if '52주 최저' in display_df.columns:
+            display_df['52주 최저'] = display_df['52주 최저'].apply(lambda x: f"{int(x):,}") 
+        
+        # 화면에 보여줄 기둥(컬럼)들도 안전하게 조립합니다.
+        base_cols = ['Code', 'Name', '업종', '시가총액(억)', '현재가']
+        if '52주 최저' in display_df.columns: base_cols.append('52주 최저')
+        if '52주 최고' in display_df.columns: base_cols.append('52주 최고')
+        
+        display_cols = base_cols + ['PER', 'PBR', 'ROE', '부채비율(%)', '영업이익(억)']
+        
         if 'RSI' in display_df.columns: display_cols.append('RSI')
         if '거래량(%)' in display_df.columns: display_cols.append('거래량(%)') 
+        
         st.dataframe(display_df[display_cols], use_container_width=True, hide_index=True)
         
         csv = convert_df_to_csv(display_df[display_cols])
