@@ -110,26 +110,34 @@ def safe_float(text):
         return float(text.strip().replace(',', ''))
     except: return 0.0
 
-# [강력하게 수정됨] 부채비율, 영업이익 추출 (정규표현식으로 보이지 않는 특수문자/공백 완벽 회피)
+# [완벽 복구됨] 부채비율, 영업이익 추출 (탐색 루프 논리 오류 해결)
 def get_recent_fin_value(soup, keyword):
     try:
-        table = soup.find('div', class_='cop_analysis')
-        if not table: 
-            table = soup
-            
-        for th in table.find_all('th'):
-            if keyword in th.get_text():
-                row = th.find_parent('tr')
+        # 1순위: '기업실적분석' 표에서 가장 먼저 찾기 (정확도 매우 높음)
+        cop_table = soup.find('div', class_='cop_analysis')
+        if cop_table:
+            for th in cop_table.find_all('th'):
+                if th.get_text(strip=True) == keyword:
+                    row = th.find_parent('tr')
+                    if row:
+                        tds = row.find_all('td')
+                        for td in reversed(tds):
+                            val_str = td.get_text(strip=True).replace(',', '')
+                            match = re.search(r'[-+]?\d+\.?\d*', val_str)
+                            if match:
+                                return float(match.group())
+        
+        # 2순위: 페이지 전체를 탐색 (만약 1순위에서 못 찾았을 경우 대비용, break 제거됨)
+        for el in soup.find_all(['th', 'td', 'strong', 'span']):
+            if keyword == el.get_text(strip=True):
+                row = el.find_parent('tr')
                 if row:
                     tds = row.find_all('td')
                     for td in reversed(tds):
                         val_str = td.get_text(strip=True).replace(',', '')
-                        if val_str and val_str not in ['-', 'N/A', '']:
-                            # 정규식으로 순수 숫자(음수/소수점 포함)만 정확히 매칭
-                            match = re.search(r'[-+]?\d*\.?\d+', val_str)
-                            if match:
-                                return float(match.group())
-                break
+                        match = re.search(r'[-+]?\d+\.?\d*', val_str)
+                        if match:
+                            return float(match.group())
     except: pass
     return 0.0
 
@@ -200,7 +208,7 @@ st.session_state.watchlist = st.sidebar.multiselect("장바구니 (검색하여 
 direct_scan_button = st.sidebar.button("🚀 선택 종목 다이렉트 분석 (1초)", type="primary", use_container_width=True)
 
 # --- [메인 화면 로직: 매크로 풍향계 & 스캔] ---
-st.title("📈 AI  심층 분석 시스템")
+st.title("📈 AI  심층 분석 시스템")
 
 current_time_kst = (datetime.utcnow() + timedelta(hours=9)).strftime('%Y년 %m월 %d일 %H:%M:%S')
 
