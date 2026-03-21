@@ -122,30 +122,6 @@ def get_recent_fin_value(soup, keyword):
     except: pass
     return 0.0
 
-# [신규 추가] 신용잔고율 추출 함수
-def get_credit_ratio(soup):
-    try:
-        for th in soup.find_all('th'):
-            if '신용비율' in th.text:
-                td = th.find_next_sibling('td') or th.find_parent('tr').find('td')
-                if td:
-                    val = re.sub(r'[^0-9.]', '', td.text)
-                    if val: return float(val)
-    except: pass
-    return 0.0
-
-def check_smart_money(code):
-    try:
-        url = f"https://finance.naver.com/item/frgn.naver?code={code}"
-        res = requests.get(url, headers={'User-agent': 'Mozilla/5.0'})
-        dfs = pd.read_html(io.StringIO(res.text), match='날짜')
-        df_frgn = dfs[0].dropna(subset=['날짜'])
-        recent_5 = df_frgn.head(5)
-        inst_sum = pd.to_numeric(recent_5.iloc[:, 5].astype(str).str.replace(',', ''), errors='coerce').sum()
-        frgn_sum = pd.to_numeric(recent_5.iloc[:, 6].astype(str).str.replace(',', ''), errors='coerce').sum()
-        return inst_sum, frgn_sum
-    except: return 0, 0
-
 def convert_df_to_csv(df):
     return df.to_csv(index=False, encoding='utf-8-sig')
 
@@ -169,6 +145,10 @@ if 'use_op' not in st.session_state: st.session_state.use_op = True
 if 'use_rsi' not in st.session_state: st.session_state.use_rsi = True
 if 'use_min_price' not in st.session_state: st.session_state.use_min_price = True 
 
+# 탭 2의 정밀 비교 결과를 저장할 '기억 공간'
+if 'compare_results_df' not in st.session_state: st.session_state.compare_results_df = None
+if 'backtest_results_df' not in st.session_state: st.session_state.backtest_results_df = None
+
 # --- [사이드바: 종목 선별 기준] ---
 st.sidebar.header("🔍 1~3단계: 전체 시장 스캔 필터")
 
@@ -176,7 +156,6 @@ with st.sidebar.expander("❓ 용어 및 분석 지표 설명"):
     st.caption("✅ **PER/PBR/ROE**: 가치평가의 기본 3요소")
     st.caption("📈 **MACD/RSI/볼린저/캔들**: 차트 바닥(반등) 타점 판독")
     st.caption("🦅 **52주 모멘텀**: 고점 돌파를 시도하는 강한 주도주 판독")
-    st.caption("💣 **신용잔고율**: 개미들의 '빚투' 비율 (8% 이상시 폭락 위험)")
 
 scan_limit = st.sidebar.selectbox("검사할 종목 수 (시총 상위)", [50, 100, 200, 500, 1000], index=1)
 df_krx_full = get_krx_data()
@@ -210,9 +189,8 @@ st.session_state.watchlist = st.sidebar.multiselect("장바구니 (검색하여 
 direct_scan_button = st.sidebar.button("🚀 선택 종목 다이렉트 분석 (1초)", type="primary", use_container_width=True)
 
 # --- [메인 화면 로직: 매크로 풍향계 & 스캔] ---
-st.title("📈 AI 주식 발굴 및 심층 분석 시스템")
+st.title("📈 AI 심층 분석 시스템")
 
-# [신규] 분석 기준 일시(Timestamp) 생성 (한국 시간 KST 기준)
 current_time_kst = (datetime.utcnow() + timedelta(hours=9)).strftime('%Y년 %m월 %d일 %H:%M:%S')
 
 try:
@@ -228,6 +206,9 @@ except:
 
 if scan_button or direct_scan_button:
     st.session_state.scanned_data = None 
+    st.session_state.compare_results_df = None
+    st.session_state.backtest_results_df = None
+    
     df_krx = get_krx_data()
     
     if direct_scan_button:
@@ -245,7 +226,7 @@ if scan_button or direct_scan_button:
                 filtered_by_cap = df_krx.sort_values('Marcap', ascending=False).head(scan_limit)
 
     if not filtered_by_cap.empty:
-        progress_text = f"2차: 네이버 금융 재무 및 신용 데이터 수집 중..."
+        progress_text = f"2차: 네이버 금융 재무 데이터 수집 중..."
         progress_bar = st.progress(0, text=progress_text)
         fin_results = []
         total_stocks = len(filtered_by_cap)
@@ -264,13 +245,10 @@ if scan_button or direct_scan_button:
                 op_profit = get_recent_fin_value(soup, '영업이익')
                 current_price = getattr(row, 'Price', int(row.Marcap / float(row.Stocks)) if getattr(row, 'Stocks', 0) else 0)
                 
-                # [신규] 신용잔고율 스크래핑
-                credit_ratio = get_credit_ratio(soup)
-                
                 fin_results.append({
                     'Code': code, 'Name': row.Name, '업종': row.Sector, '시가총액(억)': int(row.Marcap // 100000000), '현재가': current_price,
                     'PER': round(per, 2), 'PBR': round(pbr, 2), 'ROE': round(roe, 2),
-                    '부채비율(%)': round(debt_ratio, 2), '영업이익(억)': op_profit, '배당(%)': dvr, '신용비율(%)': credit_ratio
+                    '부채비율(%)': round(debt_ratio, 2), '영업이익(억)': op_profit, '배당(%)': dvr
                 })
             except: pass 
             progress_bar.progress((idx + 1) / total_stocks, text=f"{progress_text} ({idx+1}/{total_stocks} 완료)")
@@ -319,10 +297,8 @@ if scan_button or direct_scan_button:
 if st.session_state.scanned_data is not None and not st.session_state.scanned_data.empty:
     final_df = st.session_state.scanned_data
     
-    # [신규] 분석 데이터의 신뢰도를 높여주는 Timestamp 표시
     st.caption(f"🕒 **데이터 기준 일시 (KST):** {current_time_kst}")
     
-    # [신규] 스크롤 방지를 위한 3개의 탭(Tab) 생성
     tab1, tab2, tab3 = st.tabs(["📊 1. 검색 결과 리스트", "🚦 2. 정밀 분석 대시보드", "🤖 3. AI 리포트 & 호가창"])
     
     # --- 탭 1: 검색 결과 리스트 ---
@@ -342,11 +318,11 @@ if st.session_state.scanned_data is not None and not st.session_state.scanned_da
     
     # --- 탭 2: 정밀 분석 대시보드 ---
     with tab2:
-        st.info("💡 종목을 선택하여 수급, 볼린저밴드, 신용 위험도, 52주 신고가 모멘텀을 한눈에 비교하세요.")
+        st.info("💡 종목을 선택하여 볼린저밴드, 52주 신고가 모멘텀 등을 한눈에 비교하세요.")
         selected_names = st.multiselect("비교할 종목들을 선택하세요", final_df['Name'].tolist(), default=final_df['Name'].tolist()[:3])
         
         if st.button("🚀 선택 종목 정밀 비교", use_container_width=True) and selected_names:
-            with st.spinner('차트 지표, 리스크, 모멘텀 데이터를 융합 분석 중입니다...'):
+            with st.spinner('차트 지표 및 모멘텀 데이터를 융합 분석 중입니다...'):
                 compare_results = []
                 backtest_results = []
                 
@@ -354,21 +330,9 @@ if st.session_state.scanned_data is not None and not st.session_state.scanned_da
                     row = final_df[final_df['Name'] == name].iloc[0]
                     code = row['Code']
                     per, pbr, roe = row['PER'], row['PBR'], row['ROE']
-                    credit_ratio = row.get('신용비율(%)', 0.0)
-                    
-                    # 1. 신용잔고 리스크 판독
-                    if credit_ratio >= 8.0: credit_sig = f"💣 위험 ({credit_ratio}%)"
-                    elif credit_ratio >= 4.0: credit_sig = f"⚠️ 주의 ({credit_ratio}%)"
-                    else: credit_sig = f"🟢 안전 ({credit_ratio}%)"
                     
                     df_price = fdr.DataReader(code).tail(400)
                     if df_price.empty: continue
-                    
-                    inst_sum, frgn_sum = check_smart_money(code)
-                    if inst_sum > 0 and frgn_sum > 0: money_sig = "🔥 양매수"
-                    elif inst_sum > 0: money_sig = "🟢 기관 매수"
-                    elif frgn_sum > 0: money_sig = "🟢 외인 매수"
-                    else: money_sig = "🔴 수급 이탈"
 
                     df_price['MA20'] = df_price['Close'].rolling(window=20).mean()
                     df_price['MA60'] = df_price['Close'].rolling(window=60).mean()
@@ -404,22 +368,34 @@ if st.session_state.scanned_data is not None and not st.session_state.scanned_da
                     candle_sig = detect_candle_pattern(df_price)
                     
                     def get_historical_signals(idx):
-                        if idx < -len(df_price): return "-", "-"
+                        if idx < -len(df_price) + 1: return "-", "-"
+                        
                         ma20, ma60, ma120 = df_price['MA20'].iloc[idx], df_price['MA60'].iloc[idx], df_price['MA120'].iloc[idx]
                         if pd.isna(ma120): trend = "알수없음"
                         elif ma20 > ma60 > ma120: trend = "🟢 정배열"
                         elif ma20 < ma60 < ma120: trend = "🔴 역배열"
                         else: trend = "🟡 혼조세"
-                        m, s, h = macd_series.iloc[idx], signal_series.iloc[idx], hist_series.iloc[idx]
-                        if pd.isna(m) or pd.isna(s): macd_sig = "알수없음"
-                        elif m > s and h > 0: macd_sig = "🟢 골든크로스"
-                        else: macd_sig = "🔴 데드크로스"
+                        
+                        m_cur, s_cur = macd_series.iloc[idx], signal_series.iloc[idx]
+                        m_prev, s_prev = macd_series.iloc[idx-1], signal_series.iloc[idx-1]
+                        
+                        if pd.isna(m_cur) or pd.isna(s_cur): 
+                            macd_sig = "알수없음"
+                        else:
+                            if m_prev <= s_prev and m_cur > s_cur: 
+                                macd_sig = f"🚀 골든크로스 (M:{m_cur:.0f} > S:{s_cur:.0f})"
+                            elif m_prev >= s_prev and m_cur < s_cur: 
+                                macd_sig = f"🔻 데드크로스 (M:{m_cur:.0f} < S:{s_cur:.0f})"
+                            elif m_cur > s_cur: 
+                                macd_sig = f"🟢 매수우위 (M:{m_cur:.0f} > S:{s_cur:.0f})"
+                            else: 
+                                macd_sig = f"🔴 매도우위 (M:{m_cur:.0f} < S:{s_cur:.0f})"
+                                
                         return trend, macd_sig
 
                     current_price = df_price['Close'].iloc[-1]
                     high_52w = df_price['High'].tail(250).max() 
                     
-                    # 2. 52주 신고가 모멘텀 판독
                     breakout_ratio = (current_price / high_52w) * 100 if high_52w > 0 else 0
                     if breakout_ratio >= 98: momentum_sig = "🦅 신고가 돌파"
                     elif breakout_ratio >= 90: momentum_sig = "↗️ 돌파 시도"
@@ -432,9 +408,8 @@ if st.session_state.scanned_data is not None and not st.session_state.scanned_da
                     compare_results.append({
                         '종목명': name, '현재가': f"{int(current_price):,}원",
                         '① 이평선': cur_trend, '② MACD': cur_macd, 
-                        '③ 수급': money_sig, '④ 방어율(눌림)': dd_signal, 
-                        '⑤ 거래량': vol_sig, '⑥ 캔들': candle_sig, '⑦ 볼린저': bb_sig,
-                        '⑧ 신용(빚)': credit_sig, '⑨ 모멘텀': momentum_sig
+                        '③ 방어율(눌림)': dd_signal, '④ 거래량': vol_sig, 
+                        '⑤ 캔들': candle_sig, '⑥ 볼린저': bb_sig, '⑦ 모멘텀': momentum_sig
                     })
                     
                     periods = [("3개월 전", -60), ("6개월 전", -120), ("1년 전", -250)]
@@ -452,12 +427,16 @@ if st.session_state.scanned_data is not None and not st.session_state.scanned_da
                             '종목명': name, '투자 시점': period_name, '당시 주가': price_past_str,
                             '현재 수익률': ret_str, '당시 이평선': trend_past, '당시 MACD': macd_past
                         })
-                    
+                
                 if compare_results:
-                    st.dataframe(pd.DataFrame(compare_results), use_container_width=True, hide_index=True)
-                    st.markdown("---")
-                    st.subheader("⏪ 미니 백테스팅 (과거 매수 시점의 주가와 수익률)")
-                    st.dataframe(pd.DataFrame(backtest_results), use_container_width=True, hide_index=True)
+                    st.session_state.compare_results_df = pd.DataFrame(compare_results)
+                    st.session_state.backtest_results_df = pd.DataFrame(backtest_results)
+
+        if st.session_state.compare_results_df is not None and not st.session_state.compare_results_df.empty:
+            st.dataframe(st.session_state.compare_results_df, use_container_width=True, hide_index=True)
+            st.markdown("---")
+            st.subheader("⏪ 미니 백테스팅 (과거 매수 시점의 주가와 수익률)")
+            st.dataframe(st.session_state.backtest_results_df, use_container_width=True, hide_index=True)
 
     # --- 탭 3: AI 리포트 및 실시간 호가창 ---
     with tab3:
@@ -488,8 +467,22 @@ if st.session_state.scanned_data is not None and not st.session_state.scanned_da
                     ma120 = df_target['Close'].rolling(window=120).mean().iloc[-1]
                     trend_state = "정배열(상승추세)" if ma20 > ma60 > ma120 else ("역배열(하락추세)" if ma20 < ma60 < ma120 else "혼조세")
                     
-                    macd, signal_line, hist = calculate_macd(df_target)
-                    macd_state = "골든크로스(매수우위)" if macd > signal_line and hist > 0 else "데드크로스(매도우위)"
+                    exp1 = df_target['Close'].ewm(span=12, adjust=False).mean()
+                    exp2 = df_target['Close'].ewm(span=26, adjust=False).mean()
+                    macd_s = exp1 - exp2
+                    sig_s = macd_s.ewm(span=9, adjust=False).mean()
+                    
+                    if len(macd_s) >= 2:
+                        m_cur, s_cur = macd_s.iloc[-1], sig_s.iloc[-1]
+                        m_prev, s_prev = macd_s.iloc[-2], sig_s.iloc[-2]
+                        
+                        if m_prev <= s_prev and m_cur > s_cur: macd_state = f"골든크로스 발생 (M:{m_cur:.0f} > S:{s_cur:.0f})"
+                        elif m_prev >= s_prev and m_cur < s_cur: macd_state = f"데드크로스 발생 (M:{m_cur:.0f} < S:{s_cur:.0f})"
+                        elif m_cur > s_cur: macd_state = f"매수우위 (M:{m_cur:.0f} > S:{s_cur:.0f})"
+                        else: macd_state = f"매도우위 (M:{m_cur:.0f} < S:{s_cur:.0f})"
+                    else:
+                        macd_state = "데이터 부족"
+                        
                     rsi_val = calculate_rsi(df_target).iloc[-1]
                     candle_state = detect_candle_pattern(df_target)
 
@@ -515,7 +508,6 @@ if st.session_state.scanned_data is not None and not st.session_state.scanned_da
                     except: usd_krw = "데이터 없음"
 
                     dividend = row.get('배당(%)', 0.0)
-                    credit_ratio = row.get('신용비율(%)', 0.0)
                     
                     report_data = f"""
                     [종목 정보] {target_name} (코드: {target_code})
@@ -524,7 +516,7 @@ if st.session_state.scanned_data is not None and not st.session_state.scanned_da
                     [볼린저 밴드] 현재 위치: {bb_state}
                     [캔들 패턴] 오늘의 캔들: {candle_state}
                     [거래량 변동] 금일 거래량: {cur_vol:,}주, 20일 평균 거래량 대비 {vol_ratio:.1f}% 수준
-                    [모멘텀/리스크] 52주 신고가 상태: {momentum_state}, 신용잔고율: {credit_ratio}% (8% 이상시 악성 매물대 위험)
+                    [모멘텀/리스크] 52주 신고가 상태: {momentum_state}
                     [거버넌스] 시가배당률: {dividend}%
                     [매크로] 코스피 시장 상태: {kospi_state}, 원/달러 환율: {usd_krw}원
                     """
@@ -533,7 +525,7 @@ if st.session_state.scanned_data is not None and not st.session_state.scanned_da
                     당신은 프랍 트레이딩 펌의 수석 애널리스트입니다. 제공된 데이터를 바탕으로 14개 항목 투자 리포트를 작성하라. 
                     제공된 데이터가 있다면 막연한 소리 대신 해당 숫자를 반드시 인용하여 분석할 것.
                     제공된 데이터: {report_data}
-                    항목: 1.요약 2.개요 3.재무분석 4.밸류에이션 5.산업/경쟁 6.기술분석(이평선, 거래량, 볼린저밴드, 캔들, 52주 모멘텀 의미 반드시 포함) 7.거버넌스 8.매크로 9.리스크(신용잔고율 반드시 언급) 10.베어케이스 11.시나리오 12.점수산출 13.최종판단 14.출처(네이버 금융 명시)
+                    항목: 1.요약 2.개요 3.재무분석 4.밸류에이션 5.산업/경쟁 6.기술분석(이평선, 거래량, 볼린저밴드, 캔들, 52주 모멘텀 의미 반드시 포함) 7.거버넌스 8.매크로 9.리스크 10.베어케이스 11.시나리오 12.점수산출 13.최종판단 14.출처(네이버 금융 명시)
                     """
                     
                     response = model.generate_content(prompt)
