@@ -52,37 +52,7 @@ def get_krx_data():
         df_krx['Sector'] = df_krx['Sector'].fillna('미분류')
         return df_krx
     except Exception as e:
-        data = []
-        for sosok in [0, 1]: 
-            for page in range(1, 25): 
-                url = f"https://finance.naver.com/sise/sise_market_sum.naver?sosok={sosok}&page={page}"
-                res = session.get(url, headers=headers)
-                res.encoding = 'euc-kr'
-                soup = BeautifulSoup(res.text, 'html.parser')
-                table = soup.find('table', {'class': 'type_2'})
-                if not table: continue
-                for row in table.find_all('tr'):
-                    cols = row.find_all('td')
-                    if len(cols) >= 7:
-                        a_tag = cols[1].find('a')
-                        if a_tag:
-                            code = a_tag['href'].split('code=')[-1]
-                            name = a_tag.text.strip()
-                            price_str = cols[2].text.strip().replace(',', '')
-                            marcap_str = cols[6].text.strip().replace(',', '')
-                            try:
-                                marcap = int(marcap_str) * 100000000 
-                                price = int(price_str)
-                                stocks = int(marcap / price) if price > 0 else 1
-                            except:
-                                marcap, stocks, price = 0, 1, 0
-                            data.append({
-                                'Code': code, 'Name': name, 'Sector': '미분류', 
-                                'Marcap': marcap, 'Stocks': stocks, 'Price': price
-                            })
-                time.sleep(0.05) 
-        df_backup = pd.DataFrame(data)
-        df_backup = df_backup.sort_values('Marcap', ascending=False).reset_index(drop=True)
+        df_backup = pd.DataFrame()
         return df_backup
 
 def calculate_rsi(df, period=14):
@@ -121,6 +91,7 @@ def detect_candle_pattern(df):
     elif C < O: return "🔵 음봉"
     else: return "⚪ 보합"
 
+# [핵심 수정] 빈칸 버그를 완벽히 고친 재무 데이터 추출 함수
 def get_recent_fin_value(soup, keyword):
     try:
         ths = soup.find_all('th', string=re.compile(keyword))
@@ -129,14 +100,13 @@ def get_recent_fin_value(soup, keyword):
             if tr:
                 tds = tr.find_all('td')
                 if tds:
-                    val_str = re.sub(r'[^0-9.\-]', '', tds[-1].text)
-                    if val_str and val_str not in ['-', '.']:
-                        return float(val_str)
+                    # 표의 맨 오른쪽부터 왼쪽으로 거꾸로 확인하며 진짜 숫자를 찾습니다.
+                    for td in reversed(tds):
+                        val_str = re.sub(r'[^0-9.\-]', '', td.text.strip())
+                        if val_str and val_str not in ['-', '.']:
+                            return float(val_str)
     except: pass
     return 0.0
-
-def get_reserve_ratio(soup):
-    return get_recent_fin_value(soup, '유보율')
 
 def check_smart_money(code):
     try:
@@ -188,7 +158,6 @@ with st.sidebar.expander("❓ 용어 및 분석 지표 설명"):
     st.caption("✅ **PER/PBR/ROE**: 가치평가의 기본 3요소")
     st.caption("📈 **MACD/RSI/볼린저/캔들**: 차트 바닥(반등) 타점 판독")
     st.caption("🦅 **52주 모멘텀**: 고점 돌파를 시도하는 강한 주도주 판독")
-    st.caption("💰 **유보율**: 위기에 대비해 쌓아둔 현금 체력 (1000% 이상 튼튼)")
 
 scan_limit = st.sidebar.selectbox("검사할 종목 수 (시총 상위)", [50, 100, 200, 500, 1000], index=1, help="국내 상장사 중 시가총액이 높은 순서대로 훑을 개수를 결정합니다.")
 df_krx_full = get_krx_data()
@@ -225,7 +194,6 @@ direct_scan_button = st.sidebar.button("🚀 선택 종목 다이렉트 분석 (
 # --- [메인 화면 로직: 매크로 풍향계 & 스캔] ---
 st.title("📈 AI 주식 발굴 및 심층 분석 시스템")
 
-# [신규] 앱 접속 및 갱신 시점의 실시간 KST 시간 생성
 current_time_kst = (datetime.utcnow() + timedelta(hours=9)).strftime('%Y년 %m월 %d일 %H:%M')
 
 try:
@@ -262,7 +230,7 @@ if scan_button or direct_scan_button:
                 filtered_by_cap = df_krx.sort_values('Marcap', ascending=False).head(scan_limit)
 
     if not filtered_by_cap.empty:
-        progress_text = f"2차: 네이버 금융 재무 및 유보율 데이터 수집 중..."
+        progress_text = f"2차: 네이버 금융 재무 데이터 수집 중..."
         progress_bar = st.progress(0, text=progress_text)
         fin_results = []
         total_stocks = len(filtered_by_cap)
@@ -272,7 +240,6 @@ if scan_button or direct_scan_button:
             url = f"https://finance.naver.com/item/main.naver?code={code}" 
             try:
                 res = session.get(url, headers=headers)
-                # 완전히 안전한 인코딩 방식 적용 (오류 무시)
                 html_text = res.content.decode('euc-kr', 'replace') 
                 soup = BeautifulSoup(html_text, 'html.parser')
                 
@@ -280,6 +247,8 @@ if scan_button or direct_scan_button:
                 pbr = safe_float(soup.select_one('#_pbr').text if soup.select_one('#_pbr') else "0")
                 dvr = safe_float(soup.select_one('#_dvr').text if soup.select_one('#_dvr') else "0")
                 roe = (pbr / per) * 100 if per > 0 else 0.0
+                
+                # 수정된 함수를 통해 영업이익과 부채비율을 안전하게 가져옵니다.
                 debt_ratio = get_recent_fin_value(soup, '부채비율')
                 op_profit = get_recent_fin_value(soup, '영업이익')
                 
@@ -289,20 +258,17 @@ if scan_button or direct_scan_button:
                     try: current_price = int(float(row.Marcap) / float(row.Stocks)) if float(getattr(row, 'Stocks', 0)) else 0
                     except: current_price = 0
                 
-                # 유보율 안전 추출
-                reserve_ratio = get_reserve_ratio(soup)
-                
                 try: marcap_val = int(float(row.Marcap) // 100000000)
                 except: marcap_val = 0
                 
                 fin_results.append({
                     'Code': code, 'Name': row.Name, '업종': row.Sector, '시가총액(억)': marcap_val, '현재가': current_price,
                     'PER': round(per, 2), 'PBR': round(pbr, 2), 'ROE': round(roe, 2),
-                    '부채비율(%)': round(debt_ratio, 2), '영업이익(억)': op_profit, '배당(%)': dvr, '유보율(%)': reserve_ratio
+                    '부채비율(%)': round(debt_ratio, 2), '영업이익(억)': op_profit, '배당(%)': dvr
                 })
             except Exception as e: 
                 pass 
-            time.sleep(0.05) # 네이버 봇 차단 방지 (필수)
+            time.sleep(0.05) 
             progress_bar.progress((idx + 1) / total_stocks, text=f"{progress_text} ({idx+1}/{total_stocks} 완료)")
         
         progress_bar.empty()
@@ -332,7 +298,7 @@ if scan_button or direct_scan_button:
             
             for idx, row_dict in enumerate(survivors_records):
                 try:
-                    time.sleep(0.05) # 차트 데이터 요청 시에도 차단 방어막 추가
+                    time.sleep(0.05) 
                     df_price = fdr.DataReader(row_dict['Code']).tail(40) 
                     if not df_price.empty:
                         rsi_val = calculate_rsi(df_price).iloc[-1]
@@ -340,7 +306,6 @@ if scan_button or direct_scan_button:
                             row_dict['RSI'] = round(rsi_val, 1)
                             final_results.append(row_dict)
                     else:
-                        # 차트 데이터를 못 가져와도, 다이렉트 스캔이거나 RSI 필터를 안 쓴다면 목록에서 누락시키지 않음
                         if direct_scan_button or not st.session_state.use_rsi:
                             row_dict['RSI'] = 0.0
                             final_results.append(row_dict)
@@ -357,7 +322,7 @@ if scan_button or direct_scan_button:
                 st.session_state.scanned_data = pd.DataFrame(final_results).sort_values(by='ROE', ascending=False)
             else: 
                 st.session_state.scanned_data = pd.DataFrame()
-                st.warning("⚠️ 네이버 금융 서버가 차트 데이터(RSI) 요청을 일시적으로 차단하여 결과가 모두 필터링되었습니다. '최대 RSI 적용' 필터를 끄고 다시 시도하시거나 잠시 후 쾌속 스캔을 이용해 보세요!")
+                st.warning("⚠️ 네이버 금융 차단 또는 필터 조건에 맞는 종목이 없습니다.")
 
 # --- [메인 화면 출력: 탭(Tab) 기반 UI 레이아웃] ---
 if st.session_state.scanned_data is not None and not st.session_state.scanned_data.empty:
@@ -375,7 +340,7 @@ if st.session_state.scanned_data is not None and not st.session_state.scanned_da
         display_df['영업이익(억)'] = display_df['영업이익(억)'].apply(lambda x: f"{int(x):,}") 
         display_df['현재가'] = display_df['현재가'].apply(lambda x: f"{int(x):,}") 
         
-        display_cols = ['Code', 'Name', '업종', '시가총액(억)', '현재가', 'PER', 'PBR', 'ROE', '부채비율(%)', '영업이익(억)', '유보율(%)']
+        display_cols = ['Code', 'Name', '업종', '시가총액(억)', '현재가', 'PER', 'PBR', 'ROE', '부채비율(%)', '영업이익(억)']
         if 'RSI' in display_df.columns: display_cols.append('RSI')
         
         st.dataframe(display_df[display_cols], use_container_width=True, hide_index=True)
@@ -385,23 +350,17 @@ if st.session_state.scanned_data is not None and not st.session_state.scanned_da
     
     # --- 탭 2: 정밀 분석 대시보드 ---
     with tab2:
-        st.info("💡 종목을 선택하여 수급, 볼린저밴드, 현금 창고(유보율), 52주 신고가 모멘텀을 한눈에 비교하세요.")
+        st.info("💡 종목을 선택하여 수급, 볼린저밴드, 모멘텀 등을 한눈에 비교하세요.")
         selected_names = st.multiselect("비교할 종목들을 선택하세요", final_df['Name'].tolist(), default=final_df['Name'].tolist()[:3])
         
         if st.button("🚀 선택 종목 정밀 비교", use_container_width=True) and selected_names:
-            with st.spinner('차트 지표, 현금 체력, 모멘텀 데이터를 융합 분석 중입니다...'):
+            with st.spinner('차트 지표 및 모멘텀 데이터를 융합 분석 중입니다...'):
                 compare_results = []
                 backtest_results = []
                 
                 for name in selected_names:
                     row = final_df[final_df['Name'] == name].iloc[0]
                     code = row['Code']
-                    per, pbr, roe = row['PER'], row['PBR'], row['ROE']
-                    
-                    reserve_ratio = row.get('유보율(%)', 0.0)
-                    if reserve_ratio >= 1000: reserve_sig = f"🟢 튼튼 ({int(reserve_ratio)}%)"
-                    elif reserve_ratio >= 500: reserve_sig = f"🟡 보통 ({int(reserve_ratio)}%)"
-                    else: reserve_sig = f"🔴 위험 ({int(reserve_ratio)}%)"
                     
                     df_price = fdr.DataReader(code).tail(400)
                     if df_price.empty: continue
@@ -475,7 +434,7 @@ if st.session_state.scanned_data is not None and not st.session_state.scanned_da
                         '① 이평선': cur_trend, '② MACD': cur_macd, 
                         '③ 수급': money_sig, '④ 방어율(눌림)': dd_signal, 
                         '⑤ 거래량': vol_sig, '⑥ 캔들': candle_sig, '⑦ 볼린저': bb_sig,
-                        '⑧ 현금(유보)': reserve_sig, '⑨ 모멘텀': momentum_sig # [완벽 교체] ⑧ 신용(빚) 흔적 완전 제거!
+                        '⑧ 모멘텀': momentum_sig
                     })
                     
                     periods = [("3개월 전", -60), ("6개월 전", -120), ("1년 전", -250)]
@@ -560,7 +519,6 @@ if st.session_state.scanned_data is not None and not st.session_state.scanned_da
                     except: usd_krw = "데이터 없음"
 
                     dividend = row.get('배당(%)', 0.0)
-                    reserve_ratio = row.get('유보율(%)', 0.0)
                     
                     report_data = f"""
                     [종목 정보] {target_name} (코드: {target_code})
@@ -569,7 +527,7 @@ if st.session_state.scanned_data is not None and not st.session_state.scanned_da
                     [볼린저 밴드] 현재 위치: {bb_state}
                     [캔들 패턴] 오늘의 캔들: {candle_state}
                     [거래량 변동] 금일 거래량: {cur_vol:,}주, 20일 평균 거래량 대비 {vol_ratio:.1f}% 수준
-                    [모멘텀/리스크] 52주 신고가 상태: {momentum_state}, 유보율(현금체력): {reserve_ratio}% (위기 대응 능력 및 재무 건전성 지표)
+                    [모멘텀/리스크] 52주 신고가 상태: {momentum_state}
                     [거버넌스] 시가배당률: {dividend}%
                     [매크로] 코스피 시장 상태: {kospi_state}, 원/달러 환율: {usd_krw}원
                     """
@@ -578,7 +536,7 @@ if st.session_state.scanned_data is not None and not st.session_state.scanned_da
                     당신은 프랍 트레이딩 펌의 수석 애널리스트입니다. 제공된 데이터를 바탕으로 14개 항목 투자 리포트를 작성하라. 
                     제공된 데이터가 있다면 막연한 소리 대신 해당 숫자를 반드시 인용하여 분석할 것.
                     제공된 데이터: {report_data}
-                    항목: 1.요약 2.개요 3.재무분석 4.밸류에이션 5.산업/경쟁 6.기술분석(이평선, 거래량, 볼린저밴드, 캔들, 52주 모멘텀 의미 반드시 포함) 7.거버넌스 8.매크로 9.리스크(부채비율 및 유보율을 바탕으로 한 재무안정성 반드시 언급) 10.베어케이스 11.시나리오 12.점수산출 13.최종판단 14.출처(네이버 금융 명시)
+                    항목: 1.요약 2.개요 3.재무분석 4.밸류에이션 5.산업/경쟁 6.기술분석(이평선, 거래량, 볼린저밴드, 캔들, 52주 모멘텀 의미 반드시 포함) 7.거버넌스 8.매크로 9.리스크(부채비율을 바탕으로 한 재무안정성 반드시 언급) 10.베어케이스 11.시나리오 12.점수산출 13.최종판단 14.출처(네이버 금융 명시)
                     """
                     
                     response = model.generate_content(prompt)
