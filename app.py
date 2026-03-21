@@ -5,11 +5,14 @@ from datetime import datetime, timedelta
 
 # --- [초기 설정 및 API 키 보안 세팅] ---
 st.set_page_config(layout="wide", page_title="AI 퀀트 스캐너 & 애널리스트")
-# ... 이전 코드 ...
-def get_recent_fin_value(soup, keyword):  # 특수 기호 라인을 삭제하고 정상 코드로 복구
-    # ... 나머지 코드 ...
-except: 
-    pass
+def get_recent_fin_value(soup, keyword):
+    try:
+        # 함수 내부 로직 작성
+        result = soup.find(text=keyword)
+        return result
+    except: 
+        pass # 함수 내부로 올바르게 들여쓰기됨
+
 return 0.0
 
 # [신규 추가] 신용잔고율 추출 함수
