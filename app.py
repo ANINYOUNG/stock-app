@@ -41,6 +41,7 @@ def get_krx_data():
             for page in range(1, 25): 
                 url = f"https://finance.naver.com/sise/sise_market_sum.naver?sosok={sosok}&page={page}"
                 res = requests.get(url, headers={'User-agent': 'Mozilla/5.0'})
+                res.encoding = 'euc-kr'
                 soup = BeautifulSoup(res.text, 'html.parser')
                 table = soup.find('table', {'class': 'type_2'})
                 if not table: continue
@@ -122,21 +123,29 @@ def get_recent_fin_value(soup, keyword):
     except: pass
     return 0.0
 
-def get_credit_ratio(soup):
+# [수정됨] 메인 페이지 대신 '시세(sise)' 전용 페이지에서 정확하게 신용비율을 가져옵니다.
+def get_credit_ratio(code):
     try:
+        url = f"https://finance.naver.com/item/sise.naver?code={code}"
+        res = requests.get(url, headers={'User-agent': 'Mozilla/5.0'})
+        res.encoding = 'euc-kr' # 한글 깨짐 방지
+        soup = BeautifulSoup(res.text, 'html.parser')
+        
         for th in soup.find_all('th'):
             if '신용비율' in th.text:
-                td = th.find_next_sibling('td') or th.find_parent('tr').find('td')
+                td = th.find_next_sibling('td') or th.parent.find_all('td')[-1]
                 if td:
                     val = re.sub(r'[^0-9.]', '', td.text)
                     if val: return float(val)
     except: pass
     return 0.0
 
+# [수정됨] 수급 정보 크롤링 시 euc-kr 인코딩을 강제하여 글자 깨짐(데이터 누락)을 방지합니다.
 def check_smart_money(code):
     try:
         url = f"https://finance.naver.com/item/frgn.naver?code={code}"
         res = requests.get(url, headers={'User-agent': 'Mozilla/5.0'})
+        res.encoding = 'euc-kr' # 이 부분이 없으면 네이버 HTML이 깨져서 판다스가 표를 인식하지 못합니다.
         dfs = pd.read_html(io.StringIO(res.text), match='날짜')
         df_frgn = dfs[0].dropna(subset=['날짜'])
         recent_5 = df_frgn.head(5)
@@ -168,7 +177,7 @@ if 'use_op' not in st.session_state: st.session_state.use_op = True
 if 'use_rsi' not in st.session_state: st.session_state.use_rsi = True
 if 'use_min_price' not in st.session_state: st.session_state.use_min_price = True 
 
-# 👉 [핵심 수정 부분] 탭 2의 정밀 비교 결과를 저장할 '기억 공간'을 추가로 만듭니다.
+# 탭 2의 정밀 비교 결과를 저장할 '기억 공간'
 if 'compare_results_df' not in st.session_state: st.session_state.compare_results_df = None
 if 'backtest_results_df' not in st.session_state: st.session_state.backtest_results_df = None
 
@@ -230,7 +239,6 @@ except:
 
 if scan_button or direct_scan_button:
     st.session_state.scanned_data = None 
-    # 👉 스캔을 새로 할 때는 탭 2의 기억도 비워줍니다.
     st.session_state.compare_results_df = None
     st.session_state.backtest_results_df = None
     
@@ -261,6 +269,7 @@ if scan_button or direct_scan_button:
             url = f"https://finance.naver.com/item/main.naver?code={code}" 
             try:
                 res = requests.get(url, headers={'User-agent': 'Mozilla/5.0'})
+                res.encoding = 'euc-kr'
                 soup = BeautifulSoup(res.text, 'html.parser')
                 per = safe_float(soup.select_one('#_per').text if soup.select_one('#_per') else "0")
                 pbr = safe_float(soup.select_one('#_pbr').text if soup.select_one('#_pbr') else "0")
@@ -270,7 +279,8 @@ if scan_button or direct_scan_button:
                 op_profit = get_recent_fin_value(soup, '영업이익')
                 current_price = getattr(row, 'Price', int(row.Marcap / float(row.Stocks)) if getattr(row, 'Stocks', 0) else 0)
                 
-                credit_ratio = get_credit_ratio(soup)
+                # [수정됨] 이제 soup 대신 code를 넘겨서 정확한 신용비율을 가져옵니다.
+                credit_ratio = get_credit_ratio(code)
                 
                 fin_results.append({
                     'Code': code, 'Name': row.Name, '업종': row.Sector, '시가총액(억)': int(row.Marcap // 100000000), '현재가': current_price,
@@ -348,7 +358,6 @@ if st.session_state.scanned_data is not None and not st.session_state.scanned_da
         st.info("💡 종목을 선택하여 수급, 볼린저밴드, 신용 위험도, 52주 신고가 모멘텀을 한눈에 비교하세요.")
         selected_names = st.multiselect("비교할 종목들을 선택하세요", final_df['Name'].tolist(), default=final_df['Name'].tolist()[:3])
         
-        # 👉 [핵심 수정 부분] 버튼을 누르면 계산을 한 뒤, 결과를 st.session_state (단기 기억장치)에 저장합니다.
         if st.button("🚀 선택 종목 정밀 비교", use_container_width=True) and selected_names:
             with st.spinner('차트 지표, 리스크, 모멘텀 데이터를 융합 분석 중입니다...'):
                 compare_results = []
@@ -406,6 +415,7 @@ if st.session_state.scanned_data is not None and not st.session_state.scanned_da
 
                     candle_sig = detect_candle_pattern(df_price)
                     
+                    # [수정됨] MACD 크로스오버와 단순 우위(상승/하락) 상태를 정확히 구분합니다.
                     def get_historical_signals(idx):
                         if idx < -len(df_price): return "-", "-"
                         ma20, ma60, ma120 = df_price['MA20'].iloc[idx], df_price['MA60'].iloc[idx], df_price['MA120'].iloc[idx]
@@ -413,10 +423,23 @@ if st.session_state.scanned_data is not None and not st.session_state.scanned_da
                         elif ma20 > ma60 > ma120: trend = "🟢 정배열"
                         elif ma20 < ma60 < ma120: trend = "🔴 역배열"
                         else: trend = "🟡 혼조세"
-                        m, s, h = macd_series.iloc[idx], signal_series.iloc[idx], hist_series.iloc[idx]
-                        if pd.isna(m) or pd.isna(s): macd_sig = "알수없음"
-                        elif m > s and h > 0: macd_sig = "🟢 골든크로스"
-                        else: macd_sig = "🔴 데드크로스"
+                        
+                        m, s = macd_series.iloc[idx], signal_series.iloc[idx]
+                        
+                        if pd.isna(m) or pd.isna(s): 
+                            macd_sig = "알수없음"
+                        else:
+                            try:
+                                # 어제와 오늘의 MACD 상태를 비교하여 교차(크로스) 여부를 확인
+                                m_prev, s_prev = macd_series.iloc[idx-1], signal_series.iloc[idx-1]
+                                if m_prev <= s_prev and m > s: macd_sig = "🚀 골든크로스 발생"
+                                elif m_prev >= s_prev and m < s: macd_sig = "🔻 데드크로스 발생"
+                                elif m > s: macd_sig = "🟢 상승구간(매수우위)"
+                                else: macd_sig = "🔴 하락구간(매도우위)"
+                            except:
+                                # 데이터가 부족하여 어제 비교를 할 수 없을 때
+                                macd_sig = "🟢 상승구간" if m > s else "🔴 하락구간"
+                                
                         return trend, macd_sig
 
                     current_price = df_price['Close'].iloc[-1]
@@ -455,12 +478,10 @@ if st.session_state.scanned_data is not None and not st.session_state.scanned_da
                             '현재 수익률': ret_str, '당시 이평선': trend_past, '당시 MACD': macd_past
                         })
                 
-                # 계산이 끝난 후 Session State (기억장치)에 결과를 덮어씌워 저장합니다.
                 if compare_results:
                     st.session_state.compare_results_df = pd.DataFrame(compare_results)
                     st.session_state.backtest_results_df = pd.DataFrame(backtest_results)
 
-        # 👉 [핵심 수정 부분] 버튼 클릭 여부와 상관없이, 기억장치(session_state)에 데이터가 있다면 항상 화면에 그려줍니다.
         if st.session_state.compare_results_df is not None and not st.session_state.compare_results_df.empty:
             st.dataframe(st.session_state.compare_results_df, use_container_width=True, hide_index=True)
             st.markdown("---")
@@ -496,8 +517,23 @@ if st.session_state.scanned_data is not None and not st.session_state.scanned_da
                     ma120 = df_target['Close'].rolling(window=120).mean().iloc[-1]
                     trend_state = "정배열(상승추세)" if ma20 > ma60 > ma120 else ("역배열(하락추세)" if ma20 < ma60 < ma120 else "혼조세")
                     
-                    macd, signal_line, hist = calculate_macd(df_target)
-                    macd_state = "골든크로스(매수우위)" if macd > signal_line and hist > 0 else "데드크로스(매도우위)"
+                    # [수정됨] AI 리포트용 MACD 진단도 정확하게 교차 여부와 추세를 구분합니다.
+                    exp1 = df_target['Close'].ewm(span=12, adjust=False).mean()
+                    exp2 = df_target['Close'].ewm(span=26, adjust=False).mean()
+                    macd_s = exp1 - exp2
+                    sig_s = macd_s.ewm(span=9, adjust=False).mean()
+                    
+                    if len(macd_s) >= 2:
+                        m_cur, s_cur = macd_s.iloc[-1], sig_s.iloc[-1]
+                        m_prev, s_prev = macd_s.iloc[-2], sig_s.iloc[-2]
+                        
+                        if m_prev <= s_prev and m_cur > s_cur: macd_state = "골든크로스 발생 (단기 매수 신호)"
+                        elif m_prev >= s_prev and m_cur < s_cur: macd_state = "데드크로스 발생 (단기 매도 신호)"
+                        elif m_cur > s_cur: macd_state = "매수우위 (MACD 선이 시그널 선 위에 위치)"
+                        else: macd_state = "매도우위 (MACD 선이 시그널 선 아래에 위치)"
+                    else:
+                        macd_state = "데이터 부족"
+                        
                     rsi_val = calculate_rsi(df_target).iloc[-1]
                     candle_state = detect_candle_pattern(df_target)
 
