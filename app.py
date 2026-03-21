@@ -122,7 +122,6 @@ def get_recent_fin_value(soup, keyword):
     except: pass
     return 0.0
 
-# [신규 추가] 신용잔고율 추출 함수
 def get_credit_ratio(soup):
     try:
         for th in soup.find_all('th'):
@@ -169,6 +168,10 @@ if 'use_op' not in st.session_state: st.session_state.use_op = True
 if 'use_rsi' not in st.session_state: st.session_state.use_rsi = True
 if 'use_min_price' not in st.session_state: st.session_state.use_min_price = True 
 
+# 👉 [핵심 수정 부분] 탭 2의 정밀 비교 결과를 저장할 '기억 공간'을 추가로 만듭니다.
+if 'compare_results_df' not in st.session_state: st.session_state.compare_results_df = None
+if 'backtest_results_df' not in st.session_state: st.session_state.backtest_results_df = None
+
 # --- [사이드바: 종목 선별 기준] ---
 st.sidebar.header("🔍 1~3단계: 전체 시장 스캔 필터")
 
@@ -212,7 +215,6 @@ direct_scan_button = st.sidebar.button("🚀 선택 종목 다이렉트 분석 (
 # --- [메인 화면 로직: 매크로 풍향계 & 스캔] ---
 st.title("📈 AI 주식 발굴 및 심층 분석 시스템")
 
-# [신규] 분석 기준 일시(Timestamp) 생성 (한국 시간 KST 기준)
 current_time_kst = (datetime.utcnow() + timedelta(hours=9)).strftime('%Y년 %m월 %d일 %H:%M:%S')
 
 try:
@@ -228,6 +230,10 @@ except:
 
 if scan_button or direct_scan_button:
     st.session_state.scanned_data = None 
+    # 👉 스캔을 새로 할 때는 탭 2의 기억도 비워줍니다.
+    st.session_state.compare_results_df = None
+    st.session_state.backtest_results_df = None
+    
     df_krx = get_krx_data()
     
     if direct_scan_button:
@@ -264,7 +270,6 @@ if scan_button or direct_scan_button:
                 op_profit = get_recent_fin_value(soup, '영업이익')
                 current_price = getattr(row, 'Price', int(row.Marcap / float(row.Stocks)) if getattr(row, 'Stocks', 0) else 0)
                 
-                # [신규] 신용잔고율 스크래핑
                 credit_ratio = get_credit_ratio(soup)
                 
                 fin_results.append({
@@ -319,10 +324,8 @@ if scan_button or direct_scan_button:
 if st.session_state.scanned_data is not None and not st.session_state.scanned_data.empty:
     final_df = st.session_state.scanned_data
     
-    # [신규] 분석 데이터의 신뢰도를 높여주는 Timestamp 표시
     st.caption(f"🕒 **데이터 기준 일시 (KST):** {current_time_kst}")
     
-    # [신규] 스크롤 방지를 위한 3개의 탭(Tab) 생성
     tab1, tab2, tab3 = st.tabs(["📊 1. 검색 결과 리스트", "🚦 2. 정밀 분석 대시보드", "🤖 3. AI 리포트 & 호가창"])
     
     # --- 탭 1: 검색 결과 리스트 ---
@@ -345,6 +348,7 @@ if st.session_state.scanned_data is not None and not st.session_state.scanned_da
         st.info("💡 종목을 선택하여 수급, 볼린저밴드, 신용 위험도, 52주 신고가 모멘텀을 한눈에 비교하세요.")
         selected_names = st.multiselect("비교할 종목들을 선택하세요", final_df['Name'].tolist(), default=final_df['Name'].tolist()[:3])
         
+        # 👉 [핵심 수정 부분] 버튼을 누르면 계산을 한 뒤, 결과를 st.session_state (단기 기억장치)에 저장합니다.
         if st.button("🚀 선택 종목 정밀 비교", use_container_width=True) and selected_names:
             with st.spinner('차트 지표, 리스크, 모멘텀 데이터를 융합 분석 중입니다...'):
                 compare_results = []
@@ -356,7 +360,6 @@ if st.session_state.scanned_data is not None and not st.session_state.scanned_da
                     per, pbr, roe = row['PER'], row['PBR'], row['ROE']
                     credit_ratio = row.get('신용비율(%)', 0.0)
                     
-                    # 1. 신용잔고 리스크 판독
                     if credit_ratio >= 8.0: credit_sig = f"💣 위험 ({credit_ratio}%)"
                     elif credit_ratio >= 4.0: credit_sig = f"⚠️ 주의 ({credit_ratio}%)"
                     else: credit_sig = f"🟢 안전 ({credit_ratio}%)"
@@ -419,7 +422,6 @@ if st.session_state.scanned_data is not None and not st.session_state.scanned_da
                     current_price = df_price['Close'].iloc[-1]
                     high_52w = df_price['High'].tail(250).max() 
                     
-                    # 2. 52주 신고가 모멘텀 판독
                     breakout_ratio = (current_price / high_52w) * 100 if high_52w > 0 else 0
                     if breakout_ratio >= 98: momentum_sig = "🦅 신고가 돌파"
                     elif breakout_ratio >= 90: momentum_sig = "↗️ 돌파 시도"
@@ -452,12 +454,18 @@ if st.session_state.scanned_data is not None and not st.session_state.scanned_da
                             '종목명': name, '투자 시점': period_name, '당시 주가': price_past_str,
                             '현재 수익률': ret_str, '당시 이평선': trend_past, '당시 MACD': macd_past
                         })
-                    
+                
+                # 계산이 끝난 후 Session State (기억장치)에 결과를 덮어씌워 저장합니다.
                 if compare_results:
-                    st.dataframe(pd.DataFrame(compare_results), use_container_width=True, hide_index=True)
-                    st.markdown("---")
-                    st.subheader("⏪ 미니 백테스팅 (과거 매수 시점의 주가와 수익률)")
-                    st.dataframe(pd.DataFrame(backtest_results), use_container_width=True, hide_index=True)
+                    st.session_state.compare_results_df = pd.DataFrame(compare_results)
+                    st.session_state.backtest_results_df = pd.DataFrame(backtest_results)
+
+        # 👉 [핵심 수정 부분] 버튼 클릭 여부와 상관없이, 기억장치(session_state)에 데이터가 있다면 항상 화면에 그려줍니다.
+        if st.session_state.compare_results_df is not None and not st.session_state.compare_results_df.empty:
+            st.dataframe(st.session_state.compare_results_df, use_container_width=True, hide_index=True)
+            st.markdown("---")
+            st.subheader("⏪ 미니 백테스팅 (과거 매수 시점의 주가와 수익률)")
+            st.dataframe(st.session_state.backtest_results_df, use_container_width=True, hide_index=True)
 
     # --- 탭 3: AI 리포트 및 실시간 호가창 ---
     with tab3:
