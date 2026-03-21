@@ -52,7 +52,38 @@ def get_krx_data():
         df_krx['Sector'] = df_krx['Sector'].fillna('미분류')
         return df_krx
     except Exception as e:
-        df_backup = pd.DataFrame()
+        data = []
+        for sosok in [0, 1]: 
+            for page in range(1, 25): 
+                url = f"https://finance.naver.com/sise/sise_market_sum.naver?sosok={sosok}&page={page}"
+                res = session.get(url, headers=headers)
+                res.encoding = 'euc-kr'
+                soup = BeautifulSoup(res.text, 'html.parser')
+                table = soup.find('table', {'class': 'type_2'})
+                if not table: continue
+                for row in table.find_all('tr'):
+                    cols = row.find_all('td')
+                    if len(cols) >= 7:
+                        a_tag = cols[1].find('a')
+                        if a_tag:
+                            code = a_tag['href'].split('code=')[-1]
+                            name = a_tag.text.strip()
+                            price_str = cols[2].text.strip().replace(',', '')
+                            marcap_str = cols[6].text.strip().replace(',', '')
+                            try:
+                                marcap = int(marcap_str) * 100000000 
+                                price = int(price_str)
+                                stocks = int(marcap / price) if price > 0 else 1
+                            except:
+                                marcap, stocks, price = 0, 1, 0
+                            data.append({
+                                'Code': code, 'Name': name, 'Sector': '미분류', 
+                                'Marcap': marcap, 'Stocks': stocks, 'Price': price
+                            })
+                time.sleep(0.05) 
+        df_backup = pd.DataFrame(data)
+        if not df_backup.empty:
+            df_backup = df_backup.sort_values('Marcap', ascending=False).reset_index(drop=True)
         return df_backup
 
 def calculate_rsi(df, period=14):
@@ -91,21 +122,36 @@ def detect_candle_pattern(df):
     elif C < O: return "🔵 음봉"
     else: return "⚪ 보합"
 
-# [핵심 수정] 빈칸 버그를 완벽히 고친 재무 데이터 추출 함수
+# [핵심 수정] 네이버 숨은 태그 버그를 완벽히 뚫어버리는 재무 데이터 추출 함수
 def get_recent_fin_value(soup, keyword):
     try:
-        ths = soup.find_all('th', string=re.compile(keyword))
-        for th in ths:
-            tr = th.find_parent('tr')
-            if tr:
-                tds = tr.find_all('td')
-                if tds:
-                    # 표의 맨 오른쪽부터 왼쪽으로 거꾸로 확인하며 진짜 숫자를 찾습니다.
-                    for td in reversed(tds):
-                        val_str = re.sub(r'[^0-9.\-]', '', td.text.strip())
-                        if val_str and val_str not in ['-', '.']:
-                            return float(val_str)
-    except: pass
+        target_tr = None
+        # 1. 엉뚱한 표를 잡지 않게 '기업실적분석' 표를 먼저 조준합니다.
+        div_cop = soup.find('div', class_='cop_analysis')
+        if div_cop:
+            for th in div_cop.find_all('th'):
+                # get_text()로 내부 HTML 태그를 싹 무시하고 순수 텍스트만 검사합니다.
+                if keyword in th.get_text():
+                    target_tr = th.find_parent('tr')
+                    break
+        
+        # 2. 혹시 구조가 특이한 기업이라면 전체 페이지에서 다시 찾습니다.
+        if not target_tr:
+            for th in soup.find_all('th'):
+                if keyword in th.get_text():
+                    target_tr = th.find_parent('tr')
+                    break
+                    
+        # 3. 찾은 행(tr)에서 값을 맨 뒤부터 거꾸로 꺼내옵니다.
+        if target_tr:
+            tds = target_tr.find_all('td')
+            for td in reversed(tds):
+                val_str = re.sub(r'[^0-9.\-]', '', td.get_text().strip())
+                # 빈칸이나 짝대기(-)가 아닌 진짜 숫자를 찾으면 즉시 반환!
+                if val_str and val_str not in ['-', '.']:
+                    return float(val_str)
+    except:
+        pass
     return 0.0
 
 def check_smart_money(code):
@@ -203,7 +249,7 @@ try:
     if cur_kospi >= ma20_kospi:
         st.success(f"🧭 **오늘의 시장 풍향계** (갱신: {current_time_kst}) 🟢 강세장 (코스피 20일선 돌파) | 현재가: {cur_kospi:,.2f}pt\n\n💡 **AI 전략 조언:** 시장에 돈이 돌고 있습니다. RSI 70 이하의 정배열 우량주를 적극적으로 공략하세요!")
     else:
-        st.error(f"🧭 **오늘의 시장 풍향계** (갱신: {current_time_kst}) 🔴 약세장 (코스피 20일선 이탈) | 현재가: {cur_kospi:,.2f}pt\n\n💡 **AI 전략 조언:** 시장이 조정을 받고 있습니다. 가치평가(S-RIM) 대비 매우 저렴하고 하락방어율이 좋은 종목만 보수적으로 접근하세요.")
+        st.error(f"🧭 **오늘의 시장 풍향계** (갱신: {current_time_kst}) 🔴 약세장 (코스피 20일선 이탈) | 현재가: {cur_kospi:,.2f}pt\n\n💡 **AI 전략 조언:** 시장이 조정을 받고 있습니다. 가치평가 대비 매우 저렴하고 하락방어율이 좋은 종목만 보수적으로 접근하세요.")
 except:
     st.info(f"🧭 **오늘의 시장 풍향계** (갱신: {current_time_kst}) 데이터를 불러오는 중입니다.")
 
@@ -248,7 +294,7 @@ if scan_button or direct_scan_button:
                 dvr = safe_float(soup.select_one('#_dvr').text if soup.select_one('#_dvr') else "0")
                 roe = (pbr / per) * 100 if per > 0 else 0.0
                 
-                # 수정된 함수를 통해 영업이익과 부채비율을 안전하게 가져옵니다.
+                # 수술을 마친 함수 출격!
                 debt_ratio = get_recent_fin_value(soup, '부채비율')
                 op_profit = get_recent_fin_value(soup, '영업이익')
                 
