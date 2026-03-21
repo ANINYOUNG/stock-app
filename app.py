@@ -110,47 +110,82 @@ def safe_float(text):
         return float(text.strip().replace(',', ''))
     except: return 0.0
 
+# [강력하게 수정됨] 부채비율, 영업이익 추출 (HTML 구조에 의존하지 않고 안전하게 값 파싱)
 def get_recent_fin_value(soup, keyword):
     try:
-        for th in soup.find_all('th'):
-            if keyword in th.text:
-                row = th.parent
-                tds = row.find_all('td')
-                for td in reversed(tds):
-                    val = td.text.strip().replace(',', '')
-                    if val and val not in ['-', 'N/A']: return float(val)
+        table = soup.find('div', class_='cop_analysis')
+        if not table: 
+            table = soup
+            
+        for el in table.find_all(['th', 'td']):
+            if keyword in el.get_text():
+                row = el.find_parent('tr')
+                if row:
+                    tds = row.find_all('td')
+                    for td in reversed(tds):
+                        val_str = td.get_text(strip=True).replace(',', '')
+                        if val_str and val_str not in ['-', 'N/A', '']:
+                            match = re.search(r'-?\d+\.?\d*', val_str)
+                            if match:
+                                return float(match.group())
                 break
     except: pass
     return 0.0
 
-# [수정됨] 메인 페이지 대신 '시세(sise)' 전용 페이지에서 정확하게 신용비율을 가져옵니다.
+# [강력하게 수정됨] 신용비율 추출 (정규표현식으로 숫자를 완벽 분리)
 def get_credit_ratio(code):
     try:
         url = f"https://finance.naver.com/item/sise.naver?code={code}"
         res = requests.get(url, headers={'User-agent': 'Mozilla/5.0'})
-        res.encoding = 'euc-kr' # 한글 깨짐 방지
+        res.encoding = 'euc-kr' 
         soup = BeautifulSoup(res.text, 'html.parser')
         
-        for th in soup.find_all('th'):
-            if '신용비율' in th.text:
-                td = th.find_next_sibling('td') or th.parent.find_all('td')[-1]
+        for el in soup.find_all(['th', 'td']):
+            if '신용비율' in el.get_text():
+                td = el.find_next_sibling('td')
+                if not td:
+                    row = el.find_parent('tr')
+                    if row: td = row.find_all('td')[-1]
                 if td:
-                    val = re.sub(r'[^0-9.]', '', td.text)
-                    if val: return float(val)
+                    val_str = td.get_text(strip=True)
+                    match = re.search(r'\d+\.?\d*', val_str)
+                    if match:
+                        return float(match.group())
     except: pass
     return 0.0
 
-# [수정됨] 수급 정보 크롤링 시 euc-kr 인코딩을 강제하여 글자 깨짐(데이터 누락)을 방지합니다.
+# [강력하게 수정됨] 수급 정보 크롤링 (판다스 버그 회피 및 HTML Row 단위 수동 파싱)
 def check_smart_money(code):
     try:
         url = f"https://finance.naver.com/item/frgn.naver?code={code}"
         res = requests.get(url, headers={'User-agent': 'Mozilla/5.0'})
-        res.encoding = 'euc-kr' # 이 부분이 없으면 네이버 HTML이 깨져서 판다스가 표를 인식하지 못합니다.
-        dfs = pd.read_html(io.StringIO(res.text), match='날짜')
-        df_frgn = dfs[0].dropna(subset=['날짜'])
-        recent_5 = df_frgn.head(5)
-        inst_sum = pd.to_numeric(recent_5.iloc[:, 5].astype(str).str.replace(',', ''), errors='coerce').sum()
-        frgn_sum = pd.to_numeric(recent_5.iloc[:, 6].astype(str).str.replace(',', ''), errors='coerce').sum()
+        res.encoding = 'euc-kr' 
+        soup = BeautifulSoup(res.text, 'html.parser')
+        
+        table = soup.find('table', {'class': 'type2'})
+        if not table: return 0, 0
+        
+        inst_sum, frgn_sum = 0, 0
+        count = 0
+        for row in table.find_all('tr'):
+            cols = row.find_all('td')
+            # 네이버 외국인/기관 매매동향 표의 정상 데이터 행은 td가 9개임
+            if len(cols) == 9:
+                try:
+                    # 5번째 인덱스가 기관, 6번째 인덱스가 외국인
+                    inst_str = cols[5].get_text(strip=True).replace(',', '').replace('+', '')
+                    frgn_str = cols[6].get_text(strip=True).replace(',', '').replace('+', '')
+                    
+                    if inst_str.lstrip('-').isdigit():
+                        inst_sum += int(inst_str)
+                    if frgn_str.lstrip('-').isdigit():
+                        frgn_sum += int(frgn_str)
+                        
+                    count += 1
+                    if count >= 5: # 최근 5일치 합산
+                        break
+                except:
+                    pass
         return inst_sum, frgn_sum
     except: return 0, 0
 
@@ -275,11 +310,14 @@ if scan_button or direct_scan_button:
                 pbr = safe_float(soup.select_one('#_pbr').text if soup.select_one('#_pbr') else "0")
                 dvr = safe_float(soup.select_one('#_dvr').text if soup.select_one('#_dvr') else "0")
                 roe = (pbr / per) * 100 if per > 0 else 0.0
+                
+                # HTML 요소 추적 방식 복구 적용됨
                 debt_ratio = get_recent_fin_value(soup, '부채비율')
                 op_profit = get_recent_fin_value(soup, '영업이익')
+                
                 current_price = getattr(row, 'Price', int(row.Marcap / float(row.Stocks)) if getattr(row, 'Stocks', 0) else 0)
                 
-                # [수정됨] 이제 soup 대신 code를 넘겨서 정확한 신용비율을 가져옵니다.
+                # 정밀 숫자 추적 방식 적용됨
                 credit_ratio = get_credit_ratio(code)
                 
                 fin_results.append({
@@ -376,6 +414,7 @@ if st.session_state.scanned_data is not None and not st.session_state.scanned_da
                     df_price = fdr.DataReader(code).tail(400)
                     if df_price.empty: continue
                     
+                    # 수동 파싱 적용으로 수급 정상 작동
                     inst_sum, frgn_sum = check_smart_money(code)
                     if inst_sum > 0 and frgn_sum > 0: money_sig = "🔥 양매수"
                     elif inst_sum > 0: money_sig = "🟢 기관 매수"
@@ -415,30 +454,31 @@ if st.session_state.scanned_data is not None and not st.session_state.scanned_da
 
                     candle_sig = detect_candle_pattern(df_price)
                     
-                    # [수정됨] MACD 크로스오버와 단순 우위(상승/하락) 상태를 정확히 구분합니다.
+                    # [강력하게 수정됨] MACD 값 직접 표시 (오작동 여부 눈으로 확인 가능)
                     def get_historical_signals(idx):
-                        if idx < -len(df_price): return "-", "-"
+                        if idx < -len(df_price) + 1: return "-", "-"
+                        
                         ma20, ma60, ma120 = df_price['MA20'].iloc[idx], df_price['MA60'].iloc[idx], df_price['MA120'].iloc[idx]
                         if pd.isna(ma120): trend = "알수없음"
                         elif ma20 > ma60 > ma120: trend = "🟢 정배열"
                         elif ma20 < ma60 < ma120: trend = "🔴 역배열"
                         else: trend = "🟡 혼조세"
                         
-                        m, s = macd_series.iloc[idx], signal_series.iloc[idx]
+                        m_cur, s_cur = macd_series.iloc[idx], signal_series.iloc[idx]
+                        m_prev, s_prev = macd_series.iloc[idx-1], signal_series.iloc[idx-1]
                         
-                        if pd.isna(m) or pd.isna(s): 
+                        if pd.isna(m_cur) or pd.isna(s_cur): 
                             macd_sig = "알수없음"
                         else:
-                            try:
-                                # 어제와 오늘의 MACD 상태를 비교하여 교차(크로스) 여부를 확인
-                                m_prev, s_prev = macd_series.iloc[idx-1], signal_series.iloc[idx-1]
-                                if m_prev <= s_prev and m > s: macd_sig = "🚀 골든크로스 발생"
-                                elif m_prev >= s_prev and m < s: macd_sig = "🔻 데드크로스 발생"
-                                elif m > s: macd_sig = "🟢 상승구간(매수우위)"
-                                else: macd_sig = "🔴 하락구간(매도우위)"
-                            except:
-                                # 데이터가 부족하여 어제 비교를 할 수 없을 때
-                                macd_sig = "🟢 상승구간" if m > s else "🔴 하락구간"
+                            # 값을 노출하여 교차 여부 검증
+                            if m_prev <= s_prev and m_cur > s_cur: 
+                                macd_sig = f"🚀 골든크로스 (M:{m_cur:.0f} > S:{s_cur:.0f})"
+                            elif m_prev >= s_prev and m_cur < s_cur: 
+                                macd_sig = f"🔻 데드크로스 (M:{m_cur:.0f} < S:{s_cur:.0f})"
+                            elif m_cur > s_cur: 
+                                macd_sig = f"🟢 매수우위 (M:{m_cur:.0f} > S:{s_cur:.0f})"
+                            else: 
+                                macd_sig = f"🔴 매도우위 (M:{m_cur:.0f} < S:{s_cur:.0f})"
                                 
                         return trend, macd_sig
 
@@ -517,7 +557,7 @@ if st.session_state.scanned_data is not None and not st.session_state.scanned_da
                     ma120 = df_target['Close'].rolling(window=120).mean().iloc[-1]
                     trend_state = "정배열(상승추세)" if ma20 > ma60 > ma120 else ("역배열(하락추세)" if ma20 < ma60 < ma120 else "혼조세")
                     
-                    # [수정됨] AI 리포트용 MACD 진단도 정확하게 교차 여부와 추세를 구분합니다.
+                    # AI 리포트 MACD 지표값 노출 적용
                     exp1 = df_target['Close'].ewm(span=12, adjust=False).mean()
                     exp2 = df_target['Close'].ewm(span=26, adjust=False).mean()
                     macd_s = exp1 - exp2
@@ -527,10 +567,10 @@ if st.session_state.scanned_data is not None and not st.session_state.scanned_da
                         m_cur, s_cur = macd_s.iloc[-1], sig_s.iloc[-1]
                         m_prev, s_prev = macd_s.iloc[-2], sig_s.iloc[-2]
                         
-                        if m_prev <= s_prev and m_cur > s_cur: macd_state = "골든크로스 발생 (단기 매수 신호)"
-                        elif m_prev >= s_prev and m_cur < s_cur: macd_state = "데드크로스 발생 (단기 매도 신호)"
-                        elif m_cur > s_cur: macd_state = "매수우위 (MACD 선이 시그널 선 위에 위치)"
-                        else: macd_state = "매도우위 (MACD 선이 시그널 선 아래에 위치)"
+                        if m_prev <= s_prev and m_cur > s_cur: macd_state = f"골든크로스 발생 (M:{m_cur:.0f} > S:{s_cur:.0f})"
+                        elif m_prev >= s_prev and m_cur < s_cur: macd_state = f"데드크로스 발생 (M:{m_cur:.0f} < S:{s_cur:.0f})"
+                        elif m_cur > s_cur: macd_state = f"매수우위 (M:{m_cur:.0f} > S:{s_cur:.0f})"
+                        else: macd_state = f"매도우위 (M:{m_cur:.0f} < S:{s_cur:.0f})"
                     else:
                         macd_state = "데이터 부족"
                         
