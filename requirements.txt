@@ -5,3 +5,4 @@ numpy
 requests
 beautifulsoup4
 google-generativeai
+html5lib
