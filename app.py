@@ -4,9 +4,8 @@ import pandas as pd
 import numpy as np
 import requests
 from bs4 import BeautifulSoup
-import re
-import google.generativeai as genai
 from io import StringIO
+import google.generativeai as genai
 from datetime import datetime, timedelta
 
 # --- [초기 설정 및 API 키 보안 세팅] ---
@@ -35,37 +34,8 @@ def get_krx_data():
                 df_krx['Sector'] = '미분류'
         df_krx['Sector'] = df_krx['Sector'].fillna('미분류')
         return df_krx
-    except Exception as e:
-        data = []
-        for sosok in [0, 1]: 
-            for page in range(1, 25): 
-                url = f"https://finance.naver.com/sise/sise_market_sum.naver?sosok={sosok}&page={page}"
-                res = requests.get(url, headers={'User-agent': 'Mozilla/5.0'})
-                soup = BeautifulSoup(res.text, 'html.parser')
-                table = soup.find('table', {'class': 'type_2'})
-                if not table: continue
-                for row in table.find_all('tr'):
-                    cols = row.find_all('td')
-                    if len(cols) >= 7:
-                        a_tag = cols[1].find('a')
-                        if a_tag:
-                            code = a_tag['href'].split('code=')[-1]
-                            name = a_tag.text.strip()
-                            price_str = cols[2].text.strip().replace(',', '')
-                            marcap_str = cols[6].text.strip().replace(',', '')
-                            try:
-                                marcap = int(marcap_str) * 100000000 
-                                price = int(price_str)
-                                stocks = int(marcap / price) if price > 0 else 1
-                            except:
-                                marcap, stocks, price = 0, 1, 0
-                            data.append({
-                                'Code': code, 'Name': name, 'Sector': '미분류', 
-                                'Marcap': marcap, 'Stocks': stocks, 'Price': price
-                            })
-        df_backup = pd.DataFrame(data)
-        df_backup = df_backup.sort_values('Marcap', ascending=False).reset_index(drop=True)
-        return df_backup
+    except:
+        return pd.DataFrame()
 
 def calculate_rsi(df, period=14):
     if len(df) < period: return 50.0
@@ -113,10 +83,6 @@ def get_recent_fin_value(soup, keyword):
     except: pass
     return 0.0
 
-def convert_df_to_csv(df):
-    return df.to_csv(index=False, encoding='utf-8-sig')
-
-# 💡 신규: 네이버 외국인/기관 수급 5일치 가져오는 함수 (공매도 제외)
 def get_frgn_trend(code):
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
@@ -137,12 +103,14 @@ def get_frgn_trend(code):
         df_frgn = df_frgn.dropna(subset=[0]) 
         df_frgn = df_frgn[df_frgn[0].astype(str).str.contains(r'\d{4}\.\d{2}\.\d{2}') == True] 
         
-        # 0:날짜, 1:종가, 4:거래량, 5:기관, 6:외국인, 8:외국인보유율
         df_frgn_5days = df_frgn.head(5)[[0, 1, 4, 5, 6, 8]].copy()
         df_frgn_5days.columns = ['날짜', '종가', '거래량', '기관 순매수', '외국인 순매수', '외국인 보유율(%)']
         return df_frgn_5days
     except:
         return pd.DataFrame()
+
+def convert_df_to_csv(df):
+    return df.to_csv(index=False, encoding='utf-8-sig')
 
 # --- [단기 기억 장치 초기화] ---
 if 'min_marcap' not in st.session_state: st.session_state.min_marcap = 5000
@@ -183,7 +151,7 @@ df_krx_full = get_krx_data()
 sectors_list = [s for s in df_krx_full['Sector'].unique() if isinstance(s, str)]
 sectors_list.sort()
 default_excludes = [s for s in ['금융업', '보험업'] if s in sectors_list]
-excluded_sectors = st.sidebar.multiselect("🚫 제외할 업종 (가치 트랩 방어)", options=sectors_list, default=default_excludes)
+excluded_sectors = st.sidebar.multiselect("🚫 제외할 업종", options=sectors_list, default=default_excludes, help="은행, 보험 등은 부채비율이 무조건 높게 나오므로 제외하는 것이 좋습니다.")
 
 st.sidebar.divider()
 
@@ -197,23 +165,32 @@ if col2.button("❌ 필터 모두 끄기", use_container_width=True):
     for key in filter_keys: st.session_state[key] = False
     st.rerun()
 
+# 💡 말풍선(help) 기능 대거 적용
 with st.sidebar.expander("⚙️ 세부 재무/가격 필터 설정 (클릭하여 열기)"):
     st.session_state.use_marcap = st.checkbox("✅ 최소 시가총액 적용", value=st.session_state.use_marcap)
-    st.session_state.min_marcap = st.number_input("시가총액 (억원)", value=st.session_state.min_marcap, step=100, disabled=not st.session_state.use_marcap)
+    st.session_state.min_marcap = st.number_input("시가총액 (억원)", value=st.session_state.min_marcap, step=100, disabled=not st.session_state.use_marcap, help="회사의 덩치입니다. 너무 작은 소형주(작전주)를 피하기 위한 필터입니다.")
+    
     st.session_state.use_min_price = st.checkbox("✅ 최소 주가 적용 (동전주 제외)", value=st.session_state.use_min_price)
-    st.session_state.min_price = st.number_input("최소 주가 (원)", value=st.session_state.min_price, step=500, disabled=not st.session_state.use_min_price)
+    st.session_state.min_price = st.number_input("최소 주가 (원)", value=st.session_state.min_price, step=500, disabled=not st.session_state.use_min_price, help="1,000원 미만의 동전주는 상장폐지 위험이 크므로 피하는 것이 좋습니다.")
+    
     st.session_state.use_per = st.checkbox("✅ 최대 PER 적용", value=st.session_state.use_per)
-    st.session_state.target_per = st.number_input("PER (배)", value=st.session_state.target_per, step=1, disabled=not st.session_state.use_per)
+    st.session_state.target_per = st.number_input("PER (배)", value=st.session_state.target_per, step=1, disabled=not st.session_state.use_per, help="주가수익비율. 회사가 버는 돈 대비 주가가 얼마인지 나타냅니다. 숫자가 낮을수록 회사가 돈을 잘 버는데 주가는 싼 '저평가' 상태입니다. (보통 15 이하 선호)")
+    
     st.session_state.use_pbr = st.checkbox("✅ 최대 PBR 적용", value=st.session_state.use_pbr)
-    st.session_state.target_pbr = st.number_input("PBR (배)", value=st.session_state.target_pbr, step=0.1, disabled=not st.session_state.use_pbr)
+    st.session_state.target_pbr = st.number_input("PBR (배)", value=st.session_state.target_pbr, step=0.1, disabled=not st.session_state.use_pbr, help="주가순자산비율. 회사가 당장 망해서 전 재산을 팔았을 때와 비교한 주가입니다. 1보다 작으면 재산보다 주가가 더 싸게 거래된다는 뜻입니다.")
+    
     st.session_state.use_roe = st.checkbox("✅ 최소 ROE 적용", value=st.session_state.use_roe)
-    st.session_state.min_roe = st.number_input("ROE (%)", value=st.session_state.min_roe, step=1, disabled=not st.session_state.use_roe)
+    st.session_state.min_roe = st.number_input("ROE (%)", value=st.session_state.min_roe, step=1, disabled=not st.session_state.use_roe, help="자기자본이익률. 내 돈을 굴려서 1년에 몇 %의 수익을 냈는지 나타냅니다. 워렌 버핏은 무조건 ROE 15% 이상인 기업을 선호합니다.")
+    
     st.session_state.use_debt = st.checkbox("✅ 최대 부채비율 적용", value=st.session_state.use_debt)
-    st.session_state.max_debt = st.number_input("부채비율 (%)", value=st.session_state.max_debt, step=10, disabled=not st.session_state.use_debt)
-    st.session_state.use_op = st.checkbox("✅ 영업이익 흑자(+) 유지", value=st.session_state.use_op)
+    st.session_state.max_debt = st.number_input("부채비율 (%)", value=st.session_state.max_debt, step=10, disabled=not st.session_state.use_debt, help="회사의 빚이 얼마나 많은지를 나타냅니다. 금리가 높을 때는 부채비율이 150% 이하인 안전한 기업을 고르는 것이 좋습니다.")
+    
+    st.session_state.use_op = st.checkbox("✅ 영업이익 흑자(+) 유지", value=st.session_state.use_op, help="최소한 본업에서 돈을 까먹고 있지 않은(적자가 아닌) 기업만 걸러냅니다.")
+    
     st.session_state.use_rsi = st.checkbox("✅ 최대 RSI 적용", value=st.session_state.use_rsi)
-    st.session_state.target_rsi = st.number_input("RSI (14일)", value=st.session_state.target_rsi, step=1, disabled=not st.session_state.use_rsi)
-    st.session_state.use_vol_surge = st.checkbox("🔥 오늘 거래량 2배(200%) 폭발 종목만", value=st.session_state.use_vol_surge)
+    st.session_state.target_rsi = st.number_input("RSI (14일)", value=st.session_state.target_rsi, step=1, disabled=not st.session_state.use_rsi, help="상대강도지수. 차트의 열기를 잽니다. 30 이하면 사람들이 너무 많이 팔아치운 '과매도(바닥)' 상태이고, 70 이상이면 '과매수(천장)' 상태를 의미합니다.")
+    
+    st.session_state.use_vol_surge = st.checkbox("🔥 오늘 거래량 2배(200%) 폭발 종목만", value=st.session_state.use_vol_surge, help="평소(20일 평균) 대비 오늘 거래량이 엄청나게 터진 종목입니다. 시장의 돈(세력)이 몰리고 있다는 강력한 신호입니다.")
 
 scan_button = st.sidebar.button("🎯 전체 시장 스캐너 가동", type="primary", use_container_width=True)
 
@@ -238,6 +215,7 @@ if term_query:
 
 # --- [메인 화면 로직: 매크로 풍향계 & 스캔] ---
 st.title("📈 AI 심층 분석 시스템")
+st.markdown("표의 맨 위 **기둥(글자)**에 마우스를 올리시면 초보자를 위한 꿀팁 설명이 나타납니다! ✨")
 
 current_time_kst = (datetime.utcnow() + timedelta(hours=9)).strftime('%Y년 %m월 %d일 %H:%M:%S')
 
@@ -403,20 +381,35 @@ if st.session_state.scanned_data is not None and not st.session_state.scanned_da
         if 'RSI' in display_df.columns: display_cols.append('RSI')
         if '거래량(%)' in display_df.columns: display_cols.append('거래량(%)') 
         
-        st.dataframe(display_df[display_cols], use_container_width=True, hide_index=True)
+        # 💡 스트림릿 공식 말풍선(Tooltip) 기능을 컬럼 헤더에 적용
+        st.dataframe(display_df[display_cols], use_container_width=True, hide_index=True, 
+            column_config={
+                "S-RIM적정가": st.column_config.Column(help="사경인 회계사의 잔여이익모델로 계산한 이 기업의 '진짜 가치(적정 주가)'입니다."),
+                "PER": st.column_config.Column(help="주가수익비율. 회사가 버는 돈 대비 주가가 얼마인지 나타냅니다. 낮을수록 저평가!"),
+                "PBR": st.column_config.Column(help="주가순자산비율. 회사가 가진 재산 대비 주가가 얼마인지 나타냅니다. 1보다 작으면 재산보다 주가가 싼 상태!"),
+                "ROE": st.column_config.Column(help="자기자본이익률. 내 돈을 굴려서 1년에 몇 %의 수익을 냈는지 나타냅니다. 높을수록 장사 잘하는 기업!"),
+                "부채비율(%)": st.column_config.Column(help="회사의 빚입니다. 보통 150% 이하를 안전하다고 봅니다."),
+                "RSI": st.column_config.Column(help="상대강도지수. 30 이하면 너무 많이 떨어진 과매도(바닥권), 70 이상이면 너무 많이 오른 과매수(천장권)를 의미합니다."),
+                "거래량(%)": st.column_config.Column(help="최근 20일 평균 대비 오늘 거래량이 몇 % 터졌는지 보여줍니다. 세력의 진입 흔적입니다.")
+            }
+        )
         
         csv = convert_df_to_csv(display_df[display_cols])
         st.download_button(label="📥 엑셀(CSV)로 리스트 다운로드", data=csv, file_name='quant_watchlist.csv', mime='text/csv')
     
-    # --- 탭 2: 정밀 분석 대시보드 ---
+    # --- 탭 2: 정밀 분석 대시보드 (주도력, 세력 평단가 이식) ---
     with tab2:
-        st.info("💡 종목을 선택하여 볼린저밴드, 52주 신고가 모멘텀 등을 한눈에 비교하세요.")
+        st.info("💡 종목을 선택하여 볼린저밴드, 세력 평단가, 52주 신고가 모멘텀 등을 한눈에 비교하세요.")
         selected_names = st.multiselect("비교할 종목들을 선택하세요", final_df['Name'].tolist(), default=final_df['Name'].tolist()[:3])
         
         if st.button("🚀 선택 종목 정밀 비교", use_container_width=True) and selected_names:
-            with st.spinner('차트 지표 및 모멘텀 데이터를 융합 분석 중입니다...'):
+            with st.spinner('차트 지표 및 세력 평단가/주도력 데이터를 융합 분석 중입니다...'):
                 compare_results = []
                 backtest_results = []
+                
+                # 코스피 데이터 미리 가져오기 (상대강도 계산용)
+                try: df_kospi = fdr.DataReader('KS11').tail(400)
+                except: df_kospi = pd.DataFrame()
                 
                 for name in selected_names:
                     row = final_df[final_df['Name'] == name].iloc[0]
@@ -489,11 +482,38 @@ if st.session_state.scanned_data is not None and not st.session_state.scanned_da
                     drawdown = ((current_price - high_52w) / high_52w) * 100
                     dd_signal = f"🟢 {drawdown:.1f}%" if drawdown > -20 else f"🔴 {drawdown:.1f}%"
                     
+                    # 💡 신규 이식: 주도력(RS) 및 세력 평단가(VWAP/매물대)
+                    rs_sig = "-"
+                    vwap_sig = "-"
+                    if not df_kospi.empty and len(df_price) >= 120 and len(df_kospi) >= 20:
+                        try:
+                            # 상대강도
+                            ret_1m_stock = (current_price - df_price['Close'].iloc[-20]) / df_price['Close'].iloc[-20] * 100
+                            ret_1m_kospi = (df_kospi['Close'].iloc[-1] - df_kospi['Close'].iloc[-20]) / df_kospi['Close'].iloc[-20] * 100
+                            rs_1m = ret_1m_stock - ret_1m_kospi
+                            if rs_1m > 5: rs_sig = f"🔥 주도주 (+{rs_1m:.1f}%)"
+                            elif rs_1m < -5: rs_sig = f"🧊 소외주 ({rs_1m:.1f}%)"
+                            else: rs_sig = f"⚪ 시장동기화 ({rs_1m:.1f}%)"
+                            
+                            # VWAP & 매물대
+                            df_20 = df_price.tail(20).copy()
+                            vwap_20 = (df_20['Close'] * df_20['Volume']).sum() / df_20['Volume'].sum()
+                            
+                            prices_120 = df_price.tail(120)['Close'].values
+                            volumes_120 = df_price.tail(120)['Volume'].values
+                            hist, bins = np.histogram(prices_120, bins=10, weights=volumes_120)
+                            max_vol_idx = np.argmax(hist)
+                            heaviest_price = (bins[max_vol_idx] + bins[max_vol_idx+1]) / 2
+                            
+                            vwap_sig = f"평단: {int(vwap_20):,}원 / 매물대: {int(heaviest_price):,}원"
+                        except: pass
+                    
                     compare_results.append({
                         '종목명': name, '현재가': f"{int(current_price):,}원",
                         '① 이평선': cur_trend, '② MACD': cur_macd, 
                         '③ 방어율(눌림)': dd_signal, '④ 거래량': vol_sig, 
-                        '⑤ 캔들': candle_sig, '⑥ 볼린저': bb_sig, '⑦ 모멘텀': momentum_sig
+                        '⑤ 캔들': candle_sig, '⑥ 볼린저': bb_sig, '⑦ 모멘텀': momentum_sig,
+                        '⑧ 주도력(RS)': rs_sig, '⑨ 세력평단가': vwap_sig # 💡 신규 추가 컬럼
                     })
                     
                     periods = [("3개월 전", -60), ("6개월 전", -120), ("1년 전", -250)]
@@ -517,12 +537,22 @@ if st.session_state.scanned_data is not None and not st.session_state.scanned_da
                     st.session_state.backtest_results_df = pd.DataFrame(backtest_results)
 
         if st.session_state.compare_results_df is not None and not st.session_state.compare_results_df.empty:
-            st.dataframe(st.session_state.compare_results_df, use_container_width=True, hide_index=True)
+            # 💡 탭 2에서도 말풍선 기능 대거 적용
+            st.dataframe(st.session_state.compare_results_df, use_container_width=True, hide_index=True,
+                column_config={
+                    "① 이평선": st.column_config.Column(help="이동평균선의 흐름. 정배열은 상승 추세, 역배열은 하락 추세를 의미합니다."),
+                    "② MACD": st.column_config.Column(help="빨간색(골든크로스)이면 상승 추세 시작, 파란색(데드크로스)이면 하락 추세 시작을 의미합니다."),
+                    "③ 방어율(눌림)": st.column_config.Column(help="52주 최고가 대비 현재 얼마나 떨어졌는지 보여줍니다. 폭락장에서도 덜 떨어지는 주식이 강한 주식입니다."),
+                    "⑥ 볼린저": st.column_config.Column(help="주가가 움직이는 도로(밴드). 하단선 터치 시 반등 확률이 높고, 밴드가 좁아지면(스퀴즈) 곧 크게 위아래로 터질 징조입니다."),
+                    "⑧ 주도력(RS)": st.column_config.Column(help="코스피 지수 대비 얼마나 더 올랐는지(상대강도). 폭락장에서도 혼자 버티는 '진짜 주도주'를 찾습니다."),
+                    "⑨ 세력평단가": st.column_config.Column(help="거래량을 실어 평균을 낸 '세력의 20일 평단가(VWAP)'와 120일간 가장 많이 거래된 '콘크리트 매물대'입니다.")
+                }
+            )
             st.markdown("---")
             st.subheader("⏪ 미니 백테스팅 (과거 매수 시점의 주가와 수익률)")
             st.dataframe(st.session_state.backtest_results_df, use_container_width=True, hide_index=True)
 
-    # --- 탭 3: AI 리포트 및 수급 분석 추가 ---
+    # --- 탭 3: AI 리포트 및 수급 분석 ---
     with tab3:
         target_name = st.selectbox("리포트를 생성할 최종 타겟 종목 1개를 선택하세요", final_df['Name'].tolist())
         target_code = final_df[final_df['Name'] == target_name]['Code'].values[0]
@@ -541,7 +571,6 @@ if st.session_state.scanned_data is not None and not st.session_state.scanned_da
         if report_btn:
             st.session_state.chat_history = []
             
-            # 💡 신규: 리포트 쓰기 전에 수급 데이터부터 쫙 가져옵니다.
             with st.spinner('세력(기관/외국인)의 최근 5일 매매 흔적을 추적 중입니다...'):
                 df_trend = get_frgn_trend(target_code)
                 trend_str_for_ai = "수급 데이터 없음"
@@ -551,10 +580,16 @@ if st.session_state.scanned_data is not None and not st.session_state.scanned_da
                     display_trend = df_trend.copy()
                     for col in ['종가', '거래량', '기관 순매수', '외국인 순매수']:
                         display_trend[col] = pd.to_numeric(display_trend[col], errors='coerce').fillna(0).apply(lambda x: f"{int(x):,}")
-                    st.dataframe(display_trend, hide_index=True, use_container_width=True)
+                    
+                    # 💡 수급 표에도 툴팁 추가
+                    st.dataframe(display_trend, hide_index=True, use_container_width=True,
+                        column_config={
+                            "기관 순매수": st.column_config.Column(help="국내 펀드매니저, 연기금 등이 순수하게 주식을 사들인 수량"),
+                            "외국인 순매수": st.column_config.Column(help="외국인 투자자가 순수하게 주식을 사들인 수량")
+                        }
+                    )
                     st.divider()
                     
-                    # AI에게 넘겨줄 표를 텍스트로 변환
                     trend_str_for_ai = df_trend.to_csv(index=False)
             
             with st.status(f"{target_name} AI 종합 리포트 작성 중... (거시경제, 리스크, 세력수급 포함)", expanded=True) as status:
@@ -622,7 +657,6 @@ if st.session_state.scanned_data is not None and not st.session_state.scanned_da
                     dividend = row.get('배당(%)', 0.0)
                     s_rim_val = row.get('S-RIM적정가', 0)
                     
-                    # 💡 프롬프트에 제공할 데이터 묶음에 '최근 5일 세력 수급 흐름' 추가
                     report_data = f"""
                     [종목 정보] {target_name} (코드: {target_code})
                     [재무/가치] PER: {row['PER']}배, PBR: {row['PBR']}배, ROE: {row['ROE']}%, 부채비율: {row['부채비율(%)']}%, 시가총액: {row['시가총액(억)']}억원, 최근 영업이익: {row['영업이익(억)']}억원
@@ -637,7 +671,6 @@ if st.session_state.scanned_data is not None and not st.session_state.scanned_da
                     [★세력 수급 추이 (최근 5일)]\n{trend_str_for_ai}
                     """
                     
-                    # 💡 프롬프트: 항목 6번에 세력 수급(기관/외국인) 방향성 분석 명령 추가
                     prompt = f"""
                     당신은 프랍 트레이딩 펌의 수석 애널리스트입니다. 제공된 데이터를 바탕으로 15개 항목 투자 리포트를 작성하라. 
                     제공된 데이터가 있다면 막연한 소리 대신 해당 숫자를 반드시 인용하여 분석할 것. 
