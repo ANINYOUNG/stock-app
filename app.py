@@ -194,7 +194,6 @@ st.sidebar.header("⚡ 4단계: 관심종목 쾌속 스캔")
 st.session_state.watchlist = st.sidebar.multiselect("장바구니 (검색하여 추가)", options=df_krx_full['Name'].tolist(), default=st.session_state.watchlist)
 direct_scan_button = st.sidebar.button("🚀 선택 종목 다이렉트 분석", use_container_width=True)
 
-# 💡 신규 기능: 사이드바 AI 용어 사전 탑재
 st.sidebar.divider()
 st.sidebar.subheader("🤖 미니 AI 용어 사전")
 st.sidebar.caption("투자가 어렵나요? 어려운 금융 용어를 초보자 눈높이에서 아주 쉽게 비유해서 설명해 드립니다.")
@@ -221,7 +220,7 @@ try:
     if cur_kospi >= ma20_kospi:
         st.success(f"🧭 **오늘의 시장 풍향계:** 🟢 강세장 (코스피 20일선 돌파 유지 중) | 현재가: {cur_kospi:,.2f}pt\n\n💡 **AI 전략 조언:** 시장에 돈이 돌고 있습니다. RSI 70 이하의 정배열 우량주를 적극적으로 공략하세요!")
     else:
-        st.error(f"🧭 **오늘의 시장 풍향계:** 🔴 약세장 (코스피 20일선 이탈) | 현재가: {cur_kospi:,.2f}pt\n\n💡 **AI 전략 조언:** 시장이 조정을 받고 있습니다. 가치평가(S-RIM) 대비 매우 저렴하고 하락방어율이 좋은 종목만 보수적으로 접근하세요.")
+        st.error(f"🧭 **오늘의 시장 풍향계:** 🔴 약세장 (코스피 20일선 이탈) | 현재가: {cur_kospi:,.2f}pt\n\n💡 **AI 전략 조언:** 시장이 조정을 받고 있습니다. 가치평가 대비 매우 저렴하고 하락방어율이 좋은 종목만 보수적으로 접근하세요.")
 except: pass
 
 if scan_button or direct_scan_button:
@@ -256,7 +255,7 @@ if scan_button or direct_scan_button:
                 filtered_by_cap = filtered_by_cap[filtered_by_cap['Marcap'] >= min_marcap_won]
 
     if not filtered_by_cap.empty:
-        progress_text = f"2차: 네이버 금융 재무 데이터 수집 중..."
+        progress_text = f"2차: 네이버 금융 재무 데이터 수집 및 S-RIM 가치평가 중..."
         progress_bar = st.progress(0, text=progress_text)
         fin_results = []
         total_stocks = len(filtered_by_cap)
@@ -275,8 +274,18 @@ if scan_button or direct_scan_button:
                 op_profit = get_recent_fin_value(soup, '영업이익')
                 current_price = getattr(row, 'Price', int(row.Marcap / float(row.Stocks)) if getattr(row, 'Stocks', 0) else 0)
                 
+                # 💡 S-RIM 적정주가 계산 복구 완료
+                required_return = 8.0 # 요구수익률 8% 가정
+                bps = current_price / pbr if pbr > 0 else 0
+                if bps > 0 and roe > 0:
+                    s_rim_price = bps + bps * ((roe - required_return) / required_return)
+                    s_rim_price = max(0, int(s_rim_price)) # 주가는 마이너스가 될 수 없으므로 안전장치
+                else:
+                    s_rim_price = 0
+
                 fin_results.append({
-                    'Code': code, 'Name': row.Name, '업종': row.Sector, '시가총액(억)': int(row.Marcap // 100000000), '현재가': current_price,
+                    'Code': code, 'Name': row.Name, '업종': row.Sector, '시가총액(억)': int(row.Marcap // 100000000), 
+                    '현재가': current_price, 'S-RIM적정가': s_rim_price, # 여기에 부활시켰습니다!
                     'PER': round(per, 2), 'PBR': round(pbr, 2), 'ROE': round(roe, 2),
                     '부채비율(%)': round(debt_ratio, 2), '영업이익(억)': op_profit, '배당(%)': dvr
                 })
@@ -310,10 +319,8 @@ if scan_button or direct_scan_button:
             
             for idx, row_dict in enumerate(survivors_records):
                 try:
-                    # 💡 수정됨: 최근 40일 -> 250일(1년, 52주) 데이터 확보로 변경
                     df_price = fdr.DataReader(row_dict['Code']).tail(250) 
                     if not df_price.empty:
-                        # 52주 최고/최저가 계산
                         high_52w = df_price['High'].max()
                         low_52w = df_price['Low'].min()
                         
@@ -331,8 +338,8 @@ if scan_button or direct_scan_button:
                             if direct_scan_button or not st.session_state.use_rsi or rsi_val <= st.session_state.target_rsi:
                                 row_dict['RSI'] = round(rsi_val, 1)
                                 row_dict['거래량(%)'] = f"{int(vol_ratio)}%" 
-                                row_dict['52주 최고'] = int(high_52w) # 💡 표에 들어갈 데이터 추가
-                                row_dict['52주 최저'] = int(low_52w)  # 💡 표에 들어갈 데이터 추가
+                                row_dict['52주 최고'] = int(high_52w) 
+                                row_dict['52주 최저'] = int(low_52w)  
                                 final_results.append(row_dict)
                 except: pass
                 progress_bar2.progress((idx + 1) / total_survivors, text=f"{progress_text2} ({idx+1}/{total_survivors})")
@@ -354,25 +361,19 @@ if st.session_state.scanned_data is not None and not st.session_state.scanned_da
         st.subheader(f"✅ 조건검색 결과 ({len(final_df)}개 발견)")
         display_df = final_df.copy()
         
-        # 🛡️ [안전장치 추가] 해당 데이터(컬럼)가 실제로 존재할 때만 콤마(,)를 찍습니다.
-        if '시가총액(억)' in display_df.columns:
-            display_df['시가총액(억)'] = display_df['시가총액(억)'].apply(lambda x: f"{x:,}")
-        if '영업이익(억)' in display_df.columns:
-            display_df['영업이익(억)'] = display_df['영업이익(억)'].apply(lambda x: f"{int(x):,}") 
-        if '현재가' in display_df.columns:
-            display_df['현재가'] = display_df['현재가'].apply(lambda x: f"{int(x):,}") 
-        if '52주 최고' in display_df.columns:
-            display_df['52주 최고'] = display_df['52주 최고'].apply(lambda x: f"{int(x):,}") 
-        if '52주 최저' in display_df.columns:
-            display_df['52주 최저'] = display_df['52주 최저'].apply(lambda x: f"{int(x):,}") 
+        # 🛡️ 안전하게 콤마 포맷팅 (KeyError 원천 차단)
+        if '시가총액(억)' in display_df.columns: display_df['시가총액(억)'] = display_df['시가총액(억)'].apply(lambda x: f"{x:,}")
+        if '영업이익(억)' in display_df.columns: display_df['영업이익(억)'] = display_df['영업이익(억)'].apply(lambda x: f"{int(x):,}") 
+        if '현재가' in display_df.columns: display_df['현재가'] = display_df['현재가'].apply(lambda x: f"{int(x):,}") 
+        if 'S-RIM적정가' in display_df.columns: display_df['S-RIM적정가'] = display_df['S-RIM적정가'].apply(lambda x: f"{int(x):,}") 
+        if '52주 최고' in display_df.columns: display_df['52주 최고'] = display_df['52주 최고'].apply(lambda x: f"{int(x):,}") 
+        if '52주 최저' in display_df.columns: display_df['52주 최저'] = display_df['52주 최저'].apply(lambda x: f"{int(x):,}") 
         
-        # 화면에 보여줄 기둥(컬럼)들도 안전하게 조립합니다.
-        base_cols = ['Code', 'Name', '업종', '시가총액(억)', '현재가']
+        base_cols = ['Code', 'Name', '업종', '시가총액(억)', '현재가', 'S-RIM적정가']
         if '52주 최저' in display_df.columns: base_cols.append('52주 최저')
         if '52주 최고' in display_df.columns: base_cols.append('52주 최고')
         
         display_cols = base_cols + ['PER', 'PBR', 'ROE', '부채비율(%)', '영업이익(억)']
-        
         if 'RSI' in display_df.columns: display_cols.append('RSI')
         if '거래량(%)' in display_df.columns: display_cols.append('거래량(%)') 
         
@@ -516,7 +517,6 @@ if st.session_state.scanned_data is not None and not st.session_state.scanned_da
             with st.status(f"{target_name} AI 리포트 작성 중... (거시경제, 리스크, 52주 모멘텀 분석 포함)", expanded=True) as status:
                 try:
                     row = final_df[final_df['Name'] == target_name].iloc[0]
-                    # 💡 수정됨: AI 리포트 분석용 데이터도 정확히 250일(52주)치를 가져오도록 수정
                     df_target = fdr.DataReader(target_code).tail(250)
                     cur_price = df_target['Close'].iloc[-1]
                     cur_vol = df_target['Volume'].iloc[-1]
@@ -524,7 +524,6 @@ if st.session_state.scanned_data is not None and not st.session_state.scanned_da
                     avg_vol_20 = df_target['Volume'].rolling(window=20).mean().iloc[-2] if len(df_target) >= 20 else 0
                     vol_ratio = (cur_vol / avg_vol_20) * 100 if avg_vol_20 > 0 else 0
                     
-                    # 💡 52주 최고가 / 최저가 산출 로직 완벽 연동
                     high_52w = df_target['High'].max()
                     low_52w = df_target['Low'].min()
                     
@@ -572,11 +571,13 @@ if st.session_state.scanned_data is not None and not st.session_state.scanned_da
                     except: usd_krw = "데이터 없음"
 
                     dividend = row.get('배당(%)', 0.0)
+                    s_rim_val = row.get('S-RIM적정가', 0)
                     
                     report_data = f"""
                     [종목 정보] {target_name} (코드: {target_code})
                     [재무/가치] PER: {row['PER']}배, PBR: {row['PBR']}배, ROE: {row['ROE']}%, 부채비율: {row['부채비율(%)']}%, 시가총액: {row['시가총액(억)']}억원, 최근 영업이익: {row['영업이익(억)']}억원
-                    [기술 분석] 현재가: {cur_price:,}원, 52주 최고가: {high_52w:,}원, 52주 최저가: {low_52w:,}원, 이평선 추세: {trend_state}, MACD: {macd_state}, RSI(14): {rsi_val:.1f}
+                    [가치 평가] 현재가: {cur_price:,}원, S-RIM 적정주가(요구수익률 8% 가정): {int(s_rim_val):,}원
+                    [기술 분석] 52주 최고가: {high_52w:,}원, 52주 최저가: {low_52w:,}원, 이평선 추세: {trend_state}, MACD: {macd_state}, RSI(14): {rsi_val:.1f}
                     [볼린저 밴드] 현재 위치: {bb_state}
                     [캔들 패턴] 오늘의 캔들: {candle_state}
                     [거래량 변동] 금일 거래량: {cur_vol:,}주, 20일 평균 거래량 대비 {vol_ratio:.1f}% 수준
@@ -585,12 +586,13 @@ if st.session_state.scanned_data is not None and not st.session_state.scanned_da
                     [매크로] 코스피 시장 상태: {kospi_state}, 원/달러 환율: {usd_krw}원
                     """
                     
+                    # 💡 AI가 리포트 작성 시 적정주가 괴리율을 분석하도록 프롬프트 업데이트 완료
                     prompt = f"""
                     당신은 프랍 트레이딩 펌의 수석 애널리스트입니다. 제공된 데이터를 바탕으로 14개 항목 투자 리포트를 작성하라. 
                     제공된 데이터가 있다면 막연한 소리 대신 해당 숫자를 반드시 인용하여 분석할 것. 
-                    (특히 52주 신고가, 52주 신저가 위치 대비 현재 주가의 리스크와 기회를 꼭 언급할 것)
+                    (특히 '현재가'와 'S-RIM 적정주가'의 차이 및 괴리율, 그리고 52주 신고가/신저가 위치 대비 리스크를 반드시 심도있게 언급할 것)
                     제공된 데이터: {report_data}
-                    항목: 1.요약 2.개요 3.재무분석 4.밸류에이션 5.산업/경쟁 6.기술분석(이평선, 거래량, 볼린저밴드, 캔들, 52주 모멘텀 의미 반드시 포함) 7.거버넌스 8.매크로 9.리스크 10.베어케이스 11.시나리오 12.점수산출 13.최종판단 14.출처(네이버 금융 명시)
+                    항목: 1.요약 2.개요 3.재무분석 4.밸류에이션(S-RIM 적정가 포함 분석) 5.산업/경쟁 6.기술분석(이평선, 거래량, 볼린저밴드, 캔들, 52주 모멘텀 의미 반드시 포함) 7.거버넌스 8.매크로 9.리스크 10.베어케이스 11.시나리오 12.점수산출 13.최종판단 14.출처(네이버 금융 명시)
                     """
                     
                     response = model.generate_content(prompt)
