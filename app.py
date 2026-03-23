@@ -6,7 +6,7 @@ import requests
 from bs4 import BeautifulSoup
 import re
 import google.generativeai as genai
-import io
+from io import StringIO
 from datetime import datetime, timedelta
 
 # --- [초기 설정 및 API 키 보안 세팅] ---
@@ -21,7 +21,7 @@ except ImportError:
 genai.configure(api_key=API_KEY)
 model = genai.GenerativeModel('gemini-2.5-flash')
 
-# 한국거래소 데이터 캐싱
+# --- [데이터 수집 및 보조 지표 함수] ---
 @st.cache_data(ttl=3600)
 def get_krx_data():
     try:
@@ -115,6 +115,34 @@ def get_recent_fin_value(soup, keyword):
 
 def convert_df_to_csv(df):
     return df.to_csv(index=False, encoding='utf-8-sig')
+
+# 💡 신규: 네이버 외국인/기관 수급 5일치 가져오는 함수 (공매도 제외)
+def get_frgn_trend(code):
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+    }
+    url_frgn = f"https://finance.naver.com/item/frgn.naver?code={code}"
+    res_frgn = requests.get(url_frgn, headers=headers)
+    if res_frgn.status_code != 200: return pd.DataFrame()
+
+    html_frgn = res_frgn.content.decode('euc-kr', 'replace') 
+    try:
+        df_frgn_list = pd.read_html(StringIO(html_frgn))
+        df_frgn = pd.DataFrame()
+        for df in df_frgn_list:
+            if len(df.columns) >= 9:
+                df_frgn = df
+                break
+        df_frgn.columns = range(len(df_frgn.columns))
+        df_frgn = df_frgn.dropna(subset=[0]) 
+        df_frgn = df_frgn[df_frgn[0].astype(str).str.contains(r'\d{4}\.\d{2}\.\d{2}') == True] 
+        
+        # 0:날짜, 1:종가, 4:거래량, 5:기관, 6:외국인, 8:외국인보유율
+        df_frgn_5days = df_frgn.head(5)[[0, 1, 4, 5, 6, 8]].copy()
+        df_frgn_5days.columns = ['날짜', '종가', '거래량', '기관 순매수', '외국인 순매수', '외국인 보유율(%)']
+        return df_frgn_5days
+    except:
+        return pd.DataFrame()
 
 # --- [단기 기억 장치 초기화] ---
 if 'min_marcap' not in st.session_state: st.session_state.min_marcap = 5000
@@ -274,7 +302,7 @@ if scan_button or direct_scan_button:
                 op_profit = get_recent_fin_value(soup, '영업이익')
                 current_price = getattr(row, 'Price', int(row.Marcap / float(row.Stocks)) if getattr(row, 'Stocks', 0) else 0)
                 
-                required_return = 8.0 # 요구수익률 8% 가정
+                required_return = 8.0 
                 bps = current_price / pbr if pbr > 0 else 0
                 if bps > 0 and roe > 0:
                     s_rim_price = bps + bps * ((roe - required_return) / required_return)
@@ -494,7 +522,7 @@ if st.session_state.scanned_data is not None and not st.session_state.scanned_da
             st.subheader("⏪ 미니 백테스팅 (과거 매수 시점의 주가와 수익률)")
             st.dataframe(st.session_state.backtest_results_df, use_container_width=True, hide_index=True)
 
-    # --- 탭 3: AI 리포트 및 채팅 ---
+    # --- 탭 3: AI 리포트 및 수급 분석 추가 ---
     with tab3:
         target_name = st.selectbox("리포트를 생성할 최종 타겟 종목 1개를 선택하세요", final_df['Name'].tolist())
         target_code = final_df[final_df['Name'] == target_name]['Code'].values[0]
@@ -505,7 +533,7 @@ if st.session_state.scanned_data is not None and not st.session_state.scanned_da
         
         col1, col2 = st.columns(2)
         with col1:
-            report_btn = st.button(f"📝 {target_name} AI 리포트 생성 (또는 채팅 초기화)", use_container_width=True)
+            report_btn = st.button(f"📝 {target_name} AI 리포트 생성 (세력 수급 분석 포함)", use_container_width=True)
         with col2:
             naver_url = f"https://stock.naver.com/domestic/stock/{target_code}/price"
             st.link_button(f"🔴 {target_name} 실시간 호가창 보기 (새 창)", naver_url, use_container_width=True)
@@ -513,7 +541,23 @@ if st.session_state.scanned_data is not None and not st.session_state.scanned_da
         if report_btn:
             st.session_state.chat_history = []
             
-            with st.status(f"{target_name} AI 리포트 작성 중... (거시경제, 리스크, 52주 모멘텀 분석 포함)", expanded=True) as status:
+            # 💡 신규: 리포트 쓰기 전에 수급 데이터부터 쫙 가져옵니다.
+            with st.spinner('세력(기관/외국인)의 최근 5일 매매 흔적을 추적 중입니다...'):
+                df_trend = get_frgn_trend(target_code)
+                trend_str_for_ai = "수급 데이터 없음"
+                
+                if not df_trend.empty:
+                    st.markdown("##### 🕵️‍♂️ [참고] 최근 5일 기관/외국인 수급 흐름표")
+                    display_trend = df_trend.copy()
+                    for col in ['종가', '거래량', '기관 순매수', '외국인 순매수']:
+                        display_trend[col] = pd.to_numeric(display_trend[col], errors='coerce').fillna(0).apply(lambda x: f"{int(x):,}")
+                    st.dataframe(display_trend, hide_index=True, use_container_width=True)
+                    st.divider()
+                    
+                    # AI에게 넘겨줄 표를 텍스트로 변환
+                    trend_str_for_ai = df_trend.to_csv(index=False)
+            
+            with st.status(f"{target_name} AI 종합 리포트 작성 중... (거시경제, 리스크, 세력수급 포함)", expanded=True) as status:
                 try:
                     row = final_df[final_df['Name'] == target_name].iloc[0]
                     df_target = fdr.DataReader(target_code).tail(250)
@@ -549,7 +593,6 @@ if st.session_state.scanned_data is not None and not st.session_state.scanned_da
                     rsi_val = calculate_rsi(df_target).iloc[-1]
                     candle_state = detect_candle_pattern(df_target)
 
-                    # 💡 수정됨: 볼린저 밴드 가격 데이터 세밀하게 추출
                     if len(df_target) >= 20:
                         std20 = df_target['Close'].rolling(window=20).std().iloc[-1]
                         upper_band = ma20 + (std20 * 2)
@@ -579,7 +622,7 @@ if st.session_state.scanned_data is not None and not st.session_state.scanned_da
                     dividend = row.get('배당(%)', 0.0)
                     s_rim_val = row.get('S-RIM적정가', 0)
                     
-                    # 💡 프롬프트에 제공할 데이터 묶음에 볼린저 정확한 가격 추가
+                    # 💡 프롬프트에 제공할 데이터 묶음에 '최근 5일 세력 수급 흐름' 추가
                     report_data = f"""
                     [종목 정보] {target_name} (코드: {target_code})
                     [재무/가치] PER: {row['PER']}배, PBR: {row['PBR']}배, ROE: {row['ROE']}%, 부채비율: {row['부채비율(%)']}%, 시가총액: {row['시가총액(억)']}억원, 최근 영업이익: {row['영업이익(억)']}억원
@@ -591,15 +634,16 @@ if st.session_state.scanned_data is not None and not st.session_state.scanned_da
                     [모멘텀/리스크] 52주 신고가/신저가 모멘텀 상태: {momentum_state}
                     [거버넌스] 시가배당률: {dividend}%
                     [매크로] 코스피 시장 상태: {kospi_state}, 원/달러 환율: {usd_krw}원
+                    [★세력 수급 추이 (최근 5일)]\n{trend_str_for_ai}
                     """
                     
-                    # 💡 프롬프트: 15번 항목(매수/매도 참고 구간) 강력한 통제 로직 신설
+                    # 💡 프롬프트: 항목 6번에 세력 수급(기관/외국인) 방향성 분석 명령 추가
                     prompt = f"""
                     당신은 프랍 트레이딩 펌의 수석 애널리스트입니다. 제공된 데이터를 바탕으로 15개 항목 투자 리포트를 작성하라. 
                     제공된 데이터가 있다면 막연한 소리 대신 해당 숫자를 반드시 인용하여 분석할 것. 
-                    (특히 '현재가'와 'S-RIM 적정주가'의 차이 및 괴리율, 그리고 52주 신고가/신저가 위치 대비 리스크를 반드시 심도있게 언급할 것)
+                    (특히 '현재가'와 'S-RIM 적정주가'의 괴리율, 그리고 '[★세력 수급 추이]' 표를 분석하여 기관과 외국인이 최근 5일간 매집 중인지 이탈 중인지를 반드시 구체적으로 코멘트할 것)
                     제공된 데이터: {report_data}
-                    항목: 1.요약 2.개요 3.재무분석 4.밸류에이션(S-RIM 적정가 포함 분석) 5.산업/경쟁 6.기술분석(이평선, 거래량, 볼린저밴드, 캔들, 52주 모멘텀 의미 반드시 포함) 7.거버넌스 8.매크로 9.리스크 10.베어케이스 11.시나리오 12.점수산출 13.최종판단 14.출처(네이버 금융 명시) 15.매수/매도 참고 구간 (주의: 절대 AI가 임의의 가격을 창작하지 말 것. 오직 제공된 'S-RIM 적정가', '볼린저 밴드 상단/하단 가격', '52주 최고가/최저가' 수치만을 사용하여 안전한 하방 지지선(매수 참고)과 상방 저항선(매도 참고) 밴드를 제시할 것)
+                    항목: 1.요약 2.개요 3.재무분석 4.밸류에이션(S-RIM 적정가 포함) 5.산업/경쟁 6.기술 및 수급 분석(이평선, 거래량, 볼린저밴드, 기관/외국인 수급 방향성 필수 포함) 7.거버넌스 8.매크로 9.리스크 10.베어케이스 11.시나리오 12.점수산출 13.최종판단 14.출처(네이버 금융) 15.매수/매도 참고 구간 (주의: 임의 가격 창작 금지. 제공된 적정가, 볼린저 상하단, 52주 최고/최저 가격만 조립할 것)
                     """
                     
                     response = model.generate_content(prompt)
@@ -621,7 +665,7 @@ if st.session_state.scanned_data is not None and not st.session_state.scanned_da
                 with st.chat_message("ai" if msg["role"] == "model" else "user"):
                     st.markdown(msg["parts"][0])
             
-            if user_q := st.chat_input(f"{target_name}의 가장 큰 리스크가 뭐야?"):
+            if user_q := st.chat_input(f"{target_name}의 최근 세력 흐름이 어때?"):
                 with st.chat_message("user"):
                     st.markdown(user_q)
                 st.session_state.chat_history.append({"role": "user", "parts": [user_q]})
