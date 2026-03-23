@@ -274,18 +274,17 @@ if scan_button or direct_scan_button:
                 op_profit = get_recent_fin_value(soup, '영업이익')
                 current_price = getattr(row, 'Price', int(row.Marcap / float(row.Stocks)) if getattr(row, 'Stocks', 0) else 0)
                 
-                # 💡 S-RIM 적정주가 계산 복구 완료
                 required_return = 8.0 # 요구수익률 8% 가정
                 bps = current_price / pbr if pbr > 0 else 0
                 if bps > 0 and roe > 0:
                     s_rim_price = bps + bps * ((roe - required_return) / required_return)
-                    s_rim_price = max(0, int(s_rim_price)) # 주가는 마이너스가 될 수 없으므로 안전장치
+                    s_rim_price = max(0, int(s_rim_price)) 
                 else:
                     s_rim_price = 0
 
                 fin_results.append({
                     'Code': code, 'Name': row.Name, '업종': row.Sector, '시가총액(억)': int(row.Marcap // 100000000), 
-                    '현재가': current_price, 'S-RIM적정가': s_rim_price, # 여기에 부활시켰습니다!
+                    '현재가': current_price, 'S-RIM적정가': s_rim_price,
                     'PER': round(per, 2), 'PBR': round(pbr, 2), 'ROE': round(roe, 2),
                     '부채비율(%)': round(debt_ratio, 2), '영업이익(억)': op_profit, '배당(%)': dvr
                 })
@@ -361,7 +360,6 @@ if st.session_state.scanned_data is not None and not st.session_state.scanned_da
         st.subheader(f"✅ 조건검색 결과 ({len(final_df)}개 발견)")
         display_df = final_df.copy()
         
-        # 🛡️ 안전하게 콤마 포맷팅 (KeyError 원천 차단)
         if '시가총액(억)' in display_df.columns: display_df['시가총액(억)'] = display_df['시가총액(억)'].apply(lambda x: f"{x:,}")
         if '영업이익(억)' in display_df.columns: display_df['영업이익(억)'] = display_df['영업이익(억)'].apply(lambda x: f"{int(x):,}") 
         if '현재가' in display_df.columns: display_df['현재가'] = display_df['현재가'].apply(lambda x: f"{int(x):,}") 
@@ -418,7 +416,8 @@ if st.session_state.scanned_data is not None and not st.session_state.scanned_da
                         
                         std20 = df_price['Close'].rolling(window=20).std().iloc[-1]
                         ma20_cur = df_price['MA20'].iloc[-1]
-                        upper_band, lower_band = ma20_cur + (std20 * 2), ma20_cur - (std20 * 2)
+                        upper_band = ma20_cur + (std20 * 2)
+                        lower_band = ma20_cur - (std20 * 2)
                         cur_price_val = df_price['Close'].iloc[-1]
                         bandwidth = (upper_band - lower_band) / ma20_cur if ma20_cur > 0 else 0
                         
@@ -550,15 +549,22 @@ if st.session_state.scanned_data is not None and not st.session_state.scanned_da
                     rsi_val = calculate_rsi(df_target).iloc[-1]
                     candle_state = detect_candle_pattern(df_target)
 
+                    # 💡 수정됨: 볼린저 밴드 가격 데이터 세밀하게 추출
                     if len(df_target) >= 20:
                         std20 = df_target['Close'].rolling(window=20).std().iloc[-1]
-                        upper_band, lower_band = ma20 + (std20 * 2), ma20 - (std20 * 2)
+                        upper_band = ma20 + (std20 * 2)
+                        lower_band = ma20 - (std20 * 2)
                         bandwidth = (upper_band - lower_band) / ma20 if ma20 > 0 else 0
+                        
                         if cur_price <= lower_band * 1.02: bb_state = "하한선 터치 (통계적 과매도, 반등 지지선 부근)"
                         elif cur_price >= upper_band * 0.98: bb_state = "상한선 터치 (통계적 과매수, 저항선 부근)"
                         elif bandwidth < 0.10: bb_state = "밴드 수축/스퀴즈 (에너지 응축 중, 큰 변동성 예상)"
                         else: bb_state = "밴드 중심부 순항 중"
-                    else: bb_state = "데이터 부족"
+                        
+                        bb_price_info = f"상단(저항선): {int(upper_band):,}원 / 하단(지지선): {int(lower_band):,}원"
+                    else: 
+                        bb_state = "데이터 부족"
+                        bb_price_info = "데이터 부족"
                     
                     breakout_ratio = (cur_price / high_52w) * 100 if high_52w > 0 else 0
                     if breakout_ratio >= 98: momentum_state = "52주 신고가 돌파 (강한 상승 모멘텀)"
@@ -573,12 +579,13 @@ if st.session_state.scanned_data is not None and not st.session_state.scanned_da
                     dividend = row.get('배당(%)', 0.0)
                     s_rim_val = row.get('S-RIM적정가', 0)
                     
+                    # 💡 프롬프트에 제공할 데이터 묶음에 볼린저 정확한 가격 추가
                     report_data = f"""
                     [종목 정보] {target_name} (코드: {target_code})
                     [재무/가치] PER: {row['PER']}배, PBR: {row['PBR']}배, ROE: {row['ROE']}%, 부채비율: {row['부채비율(%)']}%, 시가총액: {row['시가총액(억)']}억원, 최근 영업이익: {row['영업이익(억)']}억원
                     [가치 평가] 현재가: {cur_price:,}원, S-RIM 적정주가(요구수익률 8% 가정): {int(s_rim_val):,}원
                     [기술 분석] 52주 최고가: {high_52w:,}원, 52주 최저가: {low_52w:,}원, 이평선 추세: {trend_state}, MACD: {macd_state}, RSI(14): {rsi_val:.1f}
-                    [볼린저 밴드] 현재 위치: {bb_state}
+                    [볼린저 밴드] 현재 위치: {bb_state}, 구체적 가격 수치: {bb_price_info}
                     [캔들 패턴] 오늘의 캔들: {candle_state}
                     [거래량 변동] 금일 거래량: {cur_vol:,}주, 20일 평균 거래량 대비 {vol_ratio:.1f}% 수준
                     [모멘텀/리스크] 52주 신고가/신저가 모멘텀 상태: {momentum_state}
@@ -586,13 +593,13 @@ if st.session_state.scanned_data is not None and not st.session_state.scanned_da
                     [매크로] 코스피 시장 상태: {kospi_state}, 원/달러 환율: {usd_krw}원
                     """
                     
-                    # 💡 AI가 리포트 작성 시 적정주가 괴리율을 분석하도록 프롬프트 업데이트 완료
+                    # 💡 프롬프트: 15번 항목(매수/매도 참고 구간) 강력한 통제 로직 신설
                     prompt = f"""
-                    당신은 프랍 트레이딩 펌의 수석 애널리스트입니다. 제공된 데이터를 바탕으로 14개 항목 투자 리포트를 작성하라. 
+                    당신은 프랍 트레이딩 펌의 수석 애널리스트입니다. 제공된 데이터를 바탕으로 15개 항목 투자 리포트를 작성하라. 
                     제공된 데이터가 있다면 막연한 소리 대신 해당 숫자를 반드시 인용하여 분석할 것. 
                     (특히 '현재가'와 'S-RIM 적정주가'의 차이 및 괴리율, 그리고 52주 신고가/신저가 위치 대비 리스크를 반드시 심도있게 언급할 것)
                     제공된 데이터: {report_data}
-                    항목: 1.요약 2.개요 3.재무분석 4.밸류에이션(S-RIM 적정가 포함 분석) 5.산업/경쟁 6.기술분석(이평선, 거래량, 볼린저밴드, 캔들, 52주 모멘텀 의미 반드시 포함) 7.거버넌스 8.매크로 9.리스크 10.베어케이스 11.시나리오 12.점수산출 13.최종판단 14.출처(네이버 금융 명시)
+                    항목: 1.요약 2.개요 3.재무분석 4.밸류에이션(S-RIM 적정가 포함 분석) 5.산업/경쟁 6.기술분석(이평선, 거래량, 볼린저밴드, 캔들, 52주 모멘텀 의미 반드시 포함) 7.거버넌스 8.매크로 9.리스크 10.베어케이스 11.시나리오 12.점수산출 13.최종판단 14.출처(네이버 금융 명시) 15.매수/매도 참고 구간 (주의: 절대 AI가 임의의 가격을 창작하지 말 것. 오직 제공된 'S-RIM 적정가', '볼린저 밴드 상단/하단 가격', '52주 최고가/최저가' 수치만을 사용하여 안전한 하방 지지선(매수 참고)과 상방 저항선(매도 참고) 밴드를 제시할 것)
                     """
                     
                     response = model.generate_content(prompt)
