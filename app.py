@@ -35,7 +35,6 @@ def get_krx_data():
         df_krx['Sector'] = df_krx['Sector'].fillna('미분류')
         return df_krx
     except Exception as e:
-        # 💡 [해결 방안 1] KRX 서버가 죽었을 때 네이버 금융에서 긁어오는 강력한 백업 로직 복구!
         data = []
         for sosok in [0, 1]: 
             for page in range(1, 25): 
@@ -180,10 +179,9 @@ scan_option = st.sidebar.selectbox(
 
 df_krx_full = get_krx_data()
 
-# 💡 [해결 방안 2] 데이터가 텅 비었을 때(에러 시) 부드럽게 무시하고 넘어가도록 2중 방어막 설치
 if df_krx_full.empty or 'Sector' not in df_krx_full.columns:
     sectors_list = []
-    df_krx_full['Sector'] = '미분류' # 가짜 기둥이라도 만들어줘서 앱이 뻗지 않게 함
+    df_krx_full['Sector'] = '미분류' 
 else:
     sectors_list = [s for s in df_krx_full['Sector'].unique() if isinstance(s, str)]
     
@@ -254,7 +252,9 @@ if term_query:
 st.title("📈 AI 심층 분석 시스템")
 st.markdown("표의 맨 위 **기둥(글자)**에 마우스를 올리시면 초보자를 위한 꿀팁 설명이 나타납니다! ✨")
 
-current_time_kst = (datetime.utcnow() + timedelta(hours=9)).strftime('%Y년 %m월 %d일 %H:%M:%S')
+# 💡 스캔 시간 기록용 (KST 기준)
+now_kst = datetime.utcnow() + timedelta(hours=9)
+current_time_kst = now_kst.strftime('%Y년 %m월 %d일 %H:%M:%S')
 
 try:
     df_kospi = fdr.DataReader('KS11').tail(20)
@@ -432,8 +432,24 @@ if st.session_state.scanned_data is not None and not st.session_state.scanned_da
             }
         )
         
-        csv = convert_df_to_csv(display_df[display_cols])
-        st.download_button(label="📥 엑셀(CSV)로 리스트 다운로드", data=csv, file_name='quant_watchlist.csv', mime='text/csv')
+        # 💡 [수정] 엑셀 다운로드용 데이터에 스캔일자와 스캔시간(분) 추가 로직!
+        export_df = display_df[display_cols].copy()
+        
+        # 다운로드 받을 파일 내부에 들어갈 스캔 시간 데이터 생성
+        scan_date_str = now_kst.strftime('%Y-%m-%d')
+        scan_time_str = now_kst.strftime('%H:%M')
+        
+        # 표의 가장 앞부분(인덱스 0과 1)에 일자와 시간 컬럼을 끼워넣습니다.
+        export_df.insert(0, '스캔시간', scan_time_str)
+        export_df.insert(0, '스캔일자', scan_date_str)
+        
+        csv = convert_df_to_csv(export_df)
+        
+        # 💡 [수정] 파일명 자체에도 오늘 날짜(YYYYMMDD 형식) 추가
+        file_date_suffix = now_kst.strftime('%Y%m%d')
+        download_filename = f'quant_watchlist_{file_date_suffix}.csv'
+        
+        st.download_button(label=f"📥 엑셀(CSV)로 리스트 다운로드 ({download_filename})", data=csv, file_name=download_filename, mime='text/csv')
     
     # --- 탭 2: 정밀 분석 대시보드 ---
     with tab2:
