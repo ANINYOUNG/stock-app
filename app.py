@@ -252,7 +252,6 @@ if term_query:
 st.title("📈 AI 심층 분석 시스템")
 st.markdown("표의 맨 위 **기둥(글자)**에 마우스를 올리시면 초보자를 위한 꿀팁 설명이 나타납니다! ✨")
 
-# 💡 스캔 시간 기록용 (KST 기준)
 now_kst = datetime.utcnow() + timedelta(hours=9)
 current_time_kst = now_kst.strftime('%Y년 %m월 %d일 %H:%M:%S')
 
@@ -432,20 +431,14 @@ if st.session_state.scanned_data is not None and not st.session_state.scanned_da
             }
         )
         
-        # 💡 [수정] 엑셀 다운로드용 데이터에 스캔일자와 스캔시간(분) 추가 로직!
         export_df = display_df[display_cols].copy()
-        
-        # 다운로드 받을 파일 내부에 들어갈 스캔 시간 데이터 생성
         scan_date_str = now_kst.strftime('%Y-%m-%d')
         scan_time_str = now_kst.strftime('%H:%M')
         
-        # 표의 가장 앞부분(인덱스 0과 1)에 일자와 시간 컬럼을 끼워넣습니다.
         export_df.insert(0, '스캔시간', scan_time_str)
         export_df.insert(0, '스캔일자', scan_date_str)
         
         csv = convert_df_to_csv(export_df)
-        
-        # 💡 [수정] 파일명 자체에도 오늘 날짜(YYYYMMDD 형식) 추가
         file_date_suffix = now_kst.strftime('%Y%m%d')
         download_filename = f'quant_watchlist_{file_date_suffix}.csv'
         
@@ -738,7 +731,23 @@ if st.session_state.scanned_data is not None and not st.session_state.scanned_da
                 except Exception as e:
                     st.error(f"리포트 생성 중 에러 발생: {e}")
 
+        # 💡 신규 이식: AI 리포트가 생성되면 '다운로드 버튼' 활성화
         if st.session_state.chat_history:
+            # AI가 작성한 첫 번째 리포트 본문 가져오기
+            main_report_text = st.session_state.chat_history[1]["parts"][0]
+            
+            # 파일 이름에 날짜 꼬리표 달기
+            report_date_suffix = now_kst.strftime('%Y%m%d')
+            report_filename = f"{target_name}_AI심층리포트_{report_date_suffix}.md"
+            
+            st.download_button(
+                label=f"📥 {target_name} AI 리포트 다운로드 (.md 형식)", 
+                data=main_report_text, 
+                file_name=report_filename, 
+                mime="text/markdown",
+                use_container_width=True
+            )
+            
             st.divider()
             st.subheader(f"🗣️ {target_name}에 대해 꼬리 질문을 해보세요!")
             
