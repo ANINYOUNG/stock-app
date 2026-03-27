@@ -77,19 +77,41 @@ def calculate_rsi(df, period=14):
     rs = avg_gain / avg_loss
     return 100 - (100 / (1 + rs))
 
+# 💡 [핵심 업그레이드] 문서의 실전 캔들 패턴(20선 장대양봉, 눌림목 도지 등) 로직 반영
 def detect_candle_pattern(df):
-    if len(df) < 2: return "데이터 부족"
-    today, yest = df.iloc[-1], df.iloc[-2]
-    O, H, L, C = today['Open'], today['High'], today['Low'], today['Close']
-    y_O, y_C = yest['Open'], yest['Close']
+    if len(df) < 20: return "데이터 부족"
+    
+    df_temp = df.copy()
+    df_temp['MA20'] = df_temp['Close'].rolling(20).mean()
+    
+    today = df_temp.iloc[-1]
+    yest = df_temp.iloc[-2]
+    
+    O, H, L, C, V = today['Open'], today['High'], today['Low'], today['Close'], today['Volume']
+    y_O, y_C, y_V = yest['Open'], yest['Close'], yest['Volume']
+    ma20 = today['MA20']
+    
     body = abs(C - O)
     total_range = H - L
-    upper_shadow, lower_shadow = H - max(O, C), min(O, C) - L
+    upper_shadow = H - max(O, C)
+    lower_shadow = min(O, C) - L
+    
     if total_range == 0: return "⚪ 보합"
+    
+    # 1. 20선 지지 장대양봉 (매수세 유입)
+    if L <= ma20 <= C and C > O and body >= total_range * 0.7:
+        return "🔥 20선 지지 장대양봉"
+    # 2. 눌림목 도지 (거래량 감소 + 에너지 응축)
+    if y_C > y_O and (y_C - y_O) >= (yest['High'] - yest['Low']) * 0.6 and body <= total_range * 0.1 and V < y_V:
+        return "⏳ 눌림목 도지 (에너지 응축)"
+    # 3. 20선 위 역망치형 (매물 소화)
+    if L > ma20 and upper_shadow >= body * 2 and lower_shadow <= body * 0.5 and C > O:
+        return "☄️ 역망치형 (상단 매물 소화)"
+    # 4. 하락 후 밑꼬리 망치 (과매도 반등 신호)
+    if C < df_temp['Close'].iloc[-5] and lower_shadow >= body * 2 and upper_shadow <= body * 0.5:
+        return "🔨 하락 후 망치형 (저점 반등)"
+        
     if y_C < y_O and C > O and C > y_O and O < y_C: return "📈 상승 장악형"
-    if lower_shadow > body * 2 and upper_shadow < body * 0.5 and body > 0: return "🔨 망치형 (매수세 유입)"
-    if upper_shadow > body * 2 and lower_shadow < body * 0.5 and body > 0: return "☄️ 유성형 (매물 출회)"
-    if body < total_range * 0.1: return "➕ 도지형 (눈치 보기)"
     if C > O: return "🔴 양봉"
     elif C < O: return "🔵 음봉"
     else: return "⚪ 보합"
@@ -150,7 +172,7 @@ if 'target_pbr' not in st.session_state: st.session_state.target_pbr = 1.5
 if 'max_debt' not in st.session_state: st.session_state.max_debt = 150
 if 'target_rsi' not in st.session_state: st.session_state.target_rsi = 70
 if 'min_price' not in st.session_state: st.session_state.min_price = 2000 
-if 'target_rs' not in st.session_state: st.session_state.target_rs = 5.0 # 💡 신규: 기본 목표 RS(5%)
+if 'target_rs' not in st.session_state: st.session_state.target_rs = 5.0
 if 'scanned_data' not in st.session_state: st.session_state.scanned_data = None 
 if 'watchlist' not in st.session_state: st.session_state.watchlist = [] 
 
@@ -163,7 +185,7 @@ if 'use_op' not in st.session_state: st.session_state.use_op = True
 if 'use_rsi' not in st.session_state: st.session_state.use_rsi = True
 if 'use_min_price' not in st.session_state: st.session_state.use_min_price = True 
 if 'use_vol_surge' not in st.session_state: st.session_state.use_vol_surge = False
-if 'use_rs' not in st.session_state: st.session_state.use_rs = False # 💡 신규: RS 필터 켜기/끄기
+if 'use_rs' not in st.session_state: st.session_state.use_rs = False 
 
 if 'compare_results_df' not in st.session_state: st.session_state.compare_results_df = None
 if 'backtest_results_df' not in st.session_state: st.session_state.backtest_results_df = None
@@ -205,33 +227,32 @@ if col2.button("❌ 필터 모두 끄기", use_container_width=True):
 
 with st.sidebar.expander("⚙️ 세부 재무/가격 필터 설정 (클릭하여 열기)"):
     st.session_state.use_marcap = st.checkbox("✅ 최소 시가총액 적용", value=st.session_state.use_marcap)
-    st.session_state.min_marcap = st.number_input("시가총액 (억원)", value=st.session_state.min_marcap, step=100, disabled=not st.session_state.use_marcap, help="회사의 덩치입니다. 너무 작은 소형주(작전주)를 피하기 위한 필터입니다.")
+    st.session_state.min_marcap = st.number_input("시가총액 (억원)", value=st.session_state.min_marcap, step=100, disabled=not st.session_state.use_marcap)
     
     st.session_state.use_min_price = st.checkbox("✅ 최소 주가 적용 (동전주 제외)", value=st.session_state.use_min_price)
-    st.session_state.min_price = st.number_input("최소 주가 (원)", value=st.session_state.min_price, step=500, disabled=not st.session_state.use_min_price, help="1,000원 미만의 동전주는 상장폐지 위험이 크므로 피하는 것이 좋습니다.")
+    st.session_state.min_price = st.number_input("최소 주가 (원)", value=st.session_state.min_price, step=500, disabled=not st.session_state.use_min_price)
     
     st.session_state.use_per = st.checkbox("✅ 최대 PER 적용", value=st.session_state.use_per)
-    st.session_state.target_per = st.number_input("PER (배)", value=st.session_state.target_per, step=1, disabled=not st.session_state.use_per, help="주가수익비율. 회사가 버는 돈 대비 주가가 얼마인지 나타냅니다. 숫자가 낮을수록 저평가 상태입니다.")
+    st.session_state.target_per = st.number_input("PER (배)", value=st.session_state.target_per, step=1, disabled=not st.session_state.use_per)
     
     st.session_state.use_pbr = st.checkbox("✅ 최대 PBR 적용", value=st.session_state.use_pbr)
-    st.session_state.target_pbr = st.number_input("PBR (배)", value=st.session_state.target_pbr, step=0.1, disabled=not st.session_state.use_pbr, help="주가순자산비율. 회사가 당장 망해서 전 재산을 팔았을 때와 비교한 주가입니다. 1보다 작으면 재산보다 주가가 싼 것입니다.")
+    st.session_state.target_pbr = st.number_input("PBR (배)", value=st.session_state.target_pbr, step=0.1, disabled=not st.session_state.use_pbr)
     
     st.session_state.use_roe = st.checkbox("✅ 최소 ROE 적용", value=st.session_state.use_roe)
-    st.session_state.min_roe = st.number_input("ROE (%)", value=st.session_state.min_roe, step=1, disabled=not st.session_state.use_roe, help="자기자본이익률. 내 돈을 굴려서 1년에 몇 %의 수익을 냈는지 나타냅니다. 장사를 잘하는지 보는 지표입니다.")
+    st.session_state.min_roe = st.number_input("ROE (%)", value=st.session_state.min_roe, step=1, disabled=not st.session_state.use_roe)
     
     st.session_state.use_debt = st.checkbox("✅ 최대 부채비율 적용", value=st.session_state.use_debt)
-    st.session_state.max_debt = st.number_input("부채비율 (%)", value=st.session_state.max_debt, step=10, disabled=not st.session_state.use_debt, help="회사의 빚이 얼마나 많은지를 나타냅니다. 부채비율이 150% 이하인 기업이 안전합니다.")
+    st.session_state.max_debt = st.number_input("부채비율 (%)", value=st.session_state.max_debt, step=10, disabled=not st.session_state.use_debt)
     
-    st.session_state.use_op = st.checkbox("✅ 영업이익 흑자(+) 유지", value=st.session_state.use_op, help="본업에서 돈을 까먹고 있지 않은(적자가 아닌) 기업만 걸러냅니다.")
+    st.session_state.use_op = st.checkbox("✅ 영업이익 흑자(+) 유지", value=st.session_state.use_op)
     
     st.session_state.use_rsi = st.checkbox("✅ 최대 RSI 적용", value=st.session_state.use_rsi)
-    st.session_state.target_rsi = st.number_input("RSI (14일)", value=st.session_state.target_rsi, step=1, disabled=not st.session_state.use_rsi, help="상대강도지수. 차트의 열기를 잽니다. 30 이하면 과매도(바닥권), 70 이상이면 과매수(천장권)를 의미합니다.")
+    st.session_state.target_rsi = st.number_input("RSI (14일)", value=st.session_state.target_rsi, step=1, disabled=not st.session_state.use_rsi)
     
-    st.session_state.use_vol_surge = st.checkbox("🔥 오늘 거래량 폭발 종목만", value=st.session_state.use_vol_surge, help="평소(20일 평균) 대비 오늘 거래량이 2배 터진 종목입니다. 돈이 몰린다는 뜻입니다.")
+    st.session_state.use_vol_surge = st.checkbox("🔥 오늘 거래량 2배 폭발 종목", value=st.session_state.use_vol_surge)
 
-    # 💡 신규 UI: 주도력(RS) 필터 추가
     st.session_state.use_rs = st.checkbox("🦅 최소 상대강도(RS) 적용", value=st.session_state.use_rs)
-    st.session_state.target_rs = st.number_input("최소 RS (%)", value=st.session_state.target_rs, step=1.0, disabled=not st.session_state.use_rs, help="코스피 지수 대비 얼마나 더 올랐는지 설정합니다. 예: 5를 입력하면 코스피보다 5% 이상 수익률이 좋은 시장 주도주만 걸러냅니다.")
+    st.session_state.target_rs = st.number_input("최소 RS (%)", value=st.session_state.target_rs, step=1.0, disabled=not st.session_state.use_rs)
 
 scan_button = st.sidebar.button("🎯 전체 시장 스캐너 가동", type="primary", use_container_width=True)
 
@@ -242,7 +263,7 @@ direct_scan_button = st.sidebar.button("🚀 선택 종목 다이렉트 분석",
 
 st.sidebar.divider()
 st.sidebar.subheader("🤖 미니 AI 용어 사전")
-st.sidebar.caption("투자가 어렵나요? 어려운 금융 용어를 초보자 눈높이에서 아주 쉽게 비유해서 설명해 드립니다.")
+st.sidebar.caption("어려운 금융 용어를 초보자 눈높이에서 아주 쉽게 비유해서 설명해 드립니다.")
 term_query = st.sidebar.text_input("질문 입력 (예: 골든크로스가 뭐야?)")
 
 if term_query:
@@ -360,13 +381,12 @@ if scan_button or direct_scan_button:
             survivors_df = pd.DataFrame()
 
         if not survivors_df.empty:
-            progress_text2 = f"3차: 차트 분석 및 거래량/RS 필터 진행 중..."
+            progress_text2 = f"3차: 차트 분석 및 거래량/수급에너지 필터 진행 중..."
             progress_bar2 = st.progress(0, text=progress_text2)
             final_results = []
             total_survivors = len(survivors_df)
             survivors_records = survivors_df.to_dict('records')
             
-            # 💡 신규: RS 계산을 위해 코스피 데이터를 1번만 미리 빼옵니다. (속도 최적화 핵심)
             try:
                 df_kospi_rs = fdr.DataReader('KS11').tail(20)
                 ret_1m_kospi = (df_kospi_rs['Close'].iloc[-1] - df_kospi_rs['Close'].iloc[-20]) / df_kospi_rs['Close'].iloc[-20] * 100 if len(df_kospi_rs) >= 20 else 0
@@ -381,19 +401,26 @@ if scan_button or direct_scan_button:
                         low_52w = df_price['Low'].min()
                         
                         if len(df_price) >= 20:
-                            # 1. 거래량 필터 체크
                             avg_vol_20 = df_price['Volume'].rolling(window=20).mean().iloc[-2]
                             cur_vol = df_price['Volume'].iloc[-1]
                             vol_ratio = (cur_vol / avg_vol_20) * 100 if avg_vol_20 > 0 else 0
                             
-                            # 2. RS(상대강도) 필터 체크
                             ret_1m_stock = (df_price['Close'].iloc[-1] - df_price['Close'].iloc[-20]) / df_price['Close'].iloc[-20] * 100
                             rs_1m = ret_1m_stock - ret_1m_kospi
+                            
+                            # 💡 [핵심 업그레이드] 수급 에너지(Volume Power) 계산 로직
+                            df_5d = df_price.tail(5)
+                            up_vol = df_5d[df_5d['Close'] > df_5d['Open']]['Volume'].sum()
+                            down_vol = df_5d[df_5d['Close'] < df_5d['Open']]['Volume'].sum()
+                            if down_vol == 0:
+                                vp_ratio = 999 if up_vol > 0 else 0
+                            else:
+                                vp_ratio = (up_vol / down_vol) * 100
                         else: 
                             vol_ratio = 0
-                            rs_1m = -999 # 상장한지 얼마 안 된 종목은 패스
+                            rs_1m = -999 
+                            vp_ratio = 0
                         
-                        # 💡 두 필터 모두 통과해야 최종 리스트에 올라갑니다.
                         pass_vol_check = True
                         if st.session_state.use_vol_surge and vol_ratio < 200: pass_vol_check = False
                         
@@ -404,8 +431,9 @@ if scan_button or direct_scan_button:
                             rsi_val = calculate_rsi(df_price).iloc[-1]
                             if direct_scan_button or not st.session_state.use_rsi or rsi_val <= st.session_state.target_rsi:
                                 row_dict['RSI'] = round(rsi_val, 1)
-                                row_dict['RS(%)'] = round(rs_1m, 1) # 💡 신규 표기 컬럼
+                                row_dict['RS(%)'] = round(rs_1m, 1) 
                                 row_dict['거래량(%)'] = f"{int(vol_ratio)}%" 
+                                row_dict['수급에너지(VP)'] = f"{int(vp_ratio)}%" # 💡 신규 표기 컬럼
                                 row_dict['52주 최고'] = int(high_52w) 
                                 row_dict['52주 최저'] = int(low_52w)  
                                 final_results.append(row_dict)
@@ -413,7 +441,6 @@ if scan_button or direct_scan_button:
                 progress_bar2.progress((idx + 1) / total_survivors, text=f"{progress_text2} ({idx+1}/{total_survivors})")
             
             progress_bar2.empty()
-            # 💡 RS 점수가 높은 순(가장 강한 주도주)으로 1등부터 줄을 세웁니다.
             if final_results: st.session_state.scanned_data = pd.DataFrame(final_results).sort_values(by='RS(%)', ascending=False)
             else: st.session_state.scanned_data = pd.DataFrame()
 
@@ -443,8 +470,9 @@ if st.session_state.scanned_data is not None and not st.session_state.scanned_da
         
         display_cols = base_cols + ['PER', 'PBR', 'ROE', '부채비율(%)', '영업이익(억)']
         if 'RSI' in display_df.columns: display_cols.append('RSI')
-        if 'RS(%)' in display_df.columns: display_cols.append('RS(%)') # 💡 RS 열 추가
+        if 'RS(%)' in display_df.columns: display_cols.append('RS(%)') 
         if '거래량(%)' in display_df.columns: display_cols.append('거래량(%)') 
+        if '수급에너지(VP)' in display_df.columns: display_cols.append('수급에너지(VP)') # 💡 VP 열 추가
         
         st.dataframe(display_df[display_cols], use_container_width=True, hide_index=True, 
             column_config={
@@ -455,7 +483,8 @@ if st.session_state.scanned_data is not None and not st.session_state.scanned_da
                 "부채비율(%)": st.column_config.Column(help="회사의 빚입니다. 보통 150% 이하를 안전하다고 봅니다."),
                 "RSI": st.column_config.Column(help="상대강도지수. 30 이하면 너무 많이 떨어진 과매도(바닥권), 70 이상이면 너무 많이 오른 과매수(천장권)를 의미합니다."),
                 "RS(%)": st.column_config.Column(help="상대강도. 코스피 지수보다 몇 %나 더 강하게 올랐는지(주도주 여부) 보여줍니다."),
-                "거래량(%)": st.column_config.Column(help="최근 20일 평균 대비 오늘 거래량이 몇 % 터졌는지 보여줍니다. 세력의 진입 흔적입니다.")
+                "거래량(%)": st.column_config.Column(help="최근 20일 평균 대비 오늘 거래량이 몇 % 터졌는지 보여줍니다. 세력의 진입 흔적입니다."),
+                "수급에너지(VP)": st.column_config.Column(help="최근 5일간 양봉(상승) 거래량 합이 음봉(하락) 거래량 합의 몇 배인지 나타냅니다. 100% 이상이면 매수세가 더 강하다는 뜻입니다.")
             }
         )
         
@@ -523,6 +552,7 @@ if st.session_state.scanned_data is not None and not st.session_state.scanned_da
                     else:
                         vol_sig, bb_sig = "-", "-"
 
+                    # 💡 스마트 캔들 분석 로직 적용
                     candle_sig = detect_candle_pattern(df_price)
                     
                     def get_historical_signals(idx):
@@ -613,6 +643,7 @@ if st.session_state.scanned_data is not None and not st.session_state.scanned_da
                     "① 이평선": st.column_config.Column(help="이동평균선의 흐름. 정배열은 상승 추세, 역배열은 하락 추세를 의미합니다."),
                     "② MACD": st.column_config.Column(help="빨간색(골든크로스)이면 상승 추세 시작, 파란색(데드크로스)이면 하락 추세 시작을 의미합니다."),
                     "③ 방어율(눌림)": st.column_config.Column(help="52주 최고가 대비 현재 얼마나 떨어졌는지 보여줍니다. 폭락장에서도 덜 떨어지는 주식이 강한 주식입니다."),
+                    "⑤ 캔들": st.column_config.Column(help="오늘의 캔들 패턴. '20선 지지 장대양봉', '눌림목 도지' 등은 강력한 매수 타점입니다."),
                     "⑥ 볼린저": st.column_config.Column(help="주가가 움직이는 도로(밴드). 하단선 터치 시 반등 확률이 높고, 밴드가 좁아지면 곧 크게 위아래로 터질 징조입니다."),
                     "⑧ 주도력(RS)": st.column_config.Column(help="코스피 지수 대비 얼마나 더 올랐는지(상대강도). 폭락장에서도 혼자 버티는 '진짜 주도주'를 찾습니다."),
                     "⑨ 세력평단가": st.column_config.Column(help="거래량을 실어 평균을 낸 '세력의 20일 평단가(VWAP)'와 120일간 가장 많이 거래된 '콘크리트 매물대'입니다.")
@@ -726,6 +757,7 @@ if st.session_state.scanned_data is not None and not st.session_state.scanned_da
                     dividend = row.get('배당(%)', 0.0)
                     s_rim_val = row.get('S-RIM적정가', 0)
                     
+                    # 💡 프롬프트에 제공할 데이터 묶음
                     report_data = f"""
                     [종목 정보] {target_name} (코드: {target_code})
                     [재무/가치] PER: {row['PER']}배, PBR: {row['PBR']}배, ROE: {row['ROE']}%, 부채비율: {row['부채비율(%)']}%, 시가총액: {row['시가총액(억)']}억원, 최근 영업이익: {row['영업이익(억)']}억원
@@ -733,19 +765,24 @@ if st.session_state.scanned_data is not None and not st.session_state.scanned_da
                     [기술 분석] 52주 최고가: {high_52w:,}원, 52주 최저가: {low_52w:,}원, 이평선 추세: {trend_state}, MACD: {macd_state}, RSI(14): {rsi_val:.1f}
                     [볼린저 밴드] 현재 위치: {bb_state}, 구체적 가격 수치: {bb_price_info}
                     [캔들 패턴] 오늘의 캔들: {candle_state}
-                    [거래량 변동] 금일 거래량: {cur_vol:,}주, 20일 평균 거래량 대비 {vol_ratio:.1f}% 수준
+                    [수급 에너지] 최근 5일 매수/매도 거래량 비율(VP): {row.get('수급에너지(VP)', '데이터없음')}
                     [모멘텀/리스크] 52주 신고가/신저가 모멘텀 상태: {momentum_state}
                     [거버넌스] 시가배당률: {dividend}%
                     [매크로] 코스피 시장 상태: {kospi_state}, 원/달러 환율: {usd_krw}원
                     [★세력 수급 추이 (최근 5일)]\n{trend_str_for_ai}
                     """
                     
+                    # 💡 [핵심 업그레이드] 호가창 분석 및 -2% 기계적 손절 강제 프롬프트
                     prompt = f"""
                     당신은 프랍 트레이딩 펌의 수석 애널리스트입니다. 제공된 데이터를 바탕으로 15개 항목 투자 리포트를 작성하라. 
                     제공된 데이터가 있다면 막연한 소리 대신 해당 숫자를 반드시 인용하여 분석할 것. 
                     (특히 '현재가'와 'S-RIM 적정주가'의 괴리율, 그리고 '[★세력 수급 추이]' 표를 분석하여 기관과 외국인이 최근 5일간 매집 중인지 이탈 중인지를 반드시 구체적으로 코멘트할 것)
                     제공된 데이터: {report_data}
-                    항목: 1.요약 2.개요 3.재무분석 4.밸류에이션(S-RIM 적정가 포함) 5.산업/경쟁 6.기술 및 수급 분석(이평선, 거래량, 볼린저밴드, 기관/외국인 수급 방향성 필수 포함) 7.거버넌스 8.매크로 9.리스크 10.베어케이스 11.시나리오 12.점수산출 13.최종판단 14.출처(네이버 금융) 15.매수/매도 참고 구간 (주의: 임의 가격 창작 금지. 제공된 적정가, 볼린저 상하단, 52주 최고/최저 가격만 조립할 것)
+                    항목: 1.요약 2.개요 3.재무분석 4.밸류에이션(S-RIM 적정가 포함) 5.산업/경쟁 6.기술 및 수급 분석(이평선, 거래량, 볼린저밴드, 수급에너지(VP), 기관/외국인 수급 방향성 필수 포함) 7.거버넌스 8.매크로 9.리스크 10.베어케이스 11.시나리오 12.점수산출 13.최종판단 14.출처(네이버 금융) 15.실전 매매 전략 (호가창 및 리스크 관리)
+                    
+                    [15번 항목 추가 특별 지침]
+                    - 리포트 화면 우측의 '실시간 호가창 보기' 링크를 통해 진입 시 매도 잔량이 매수 잔량보다 많은지 반드시 확인하라는 실전 트레이딩 팁을 포함할 것.
+                    - 어떠한 타점이라도 진입가 대비 '-2%의 기계적 손절 라인'을 엄격하게 설정하여 리스크를 제어하라는 강력한 경고 문구를 반드시 추가할 것.
                     """
                     
                     response = model.generate_content(prompt)
