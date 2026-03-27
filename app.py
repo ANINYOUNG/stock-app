@@ -220,34 +220,35 @@ if col2.button("❌ 필터 모두 끄기", use_container_width=True):
     for key in filter_keys: st.session_state[key] = False
     st.rerun()
 
+# 💡 [도움말 복구 완료] 사이드바 툴팁이 다시 완벽하게 적용되었습니다!
 with st.sidebar.expander("⚙️ 세부 재무/가격 필터 설정 (클릭하여 열기)"):
     st.session_state.use_marcap = st.checkbox("✅ 최소 시가총액 적용", value=st.session_state.use_marcap)
-    st.session_state.min_marcap = st.number_input("시가총액 (억원)", value=st.session_state.min_marcap, step=100, disabled=not st.session_state.use_marcap)
+    st.session_state.min_marcap = st.number_input("시가총액 (억원)", value=st.session_state.min_marcap, step=100, disabled=not st.session_state.use_marcap, help="회사의 덩치입니다. 너무 작은 소형주(작전주)를 피하기 위한 필터입니다.")
     
     st.session_state.use_min_price = st.checkbox("✅ 최소 주가 적용 (동전주 제외)", value=st.session_state.use_min_price)
-    st.session_state.min_price = st.number_input("최소 주가 (원)", value=st.session_state.min_price, step=500, disabled=not st.session_state.use_min_price)
+    st.session_state.min_price = st.number_input("최소 주가 (원)", value=st.session_state.min_price, step=500, disabled=not st.session_state.use_min_price, help="1,000원 미만의 동전주는 상장폐지 위험이 크므로 피하는 것이 좋습니다.")
     
     st.session_state.use_per = st.checkbox("✅ 최대 PER 적용", value=st.session_state.use_per)
-    st.session_state.target_per = st.number_input("PER (배)", value=st.session_state.target_per, step=1, disabled=not st.session_state.use_per)
+    st.session_state.target_per = st.number_input("PER (배)", value=st.session_state.target_per, step=1, disabled=not st.session_state.use_per, help="주가수익비율. 회사가 버는 돈 대비 주가가 얼마인지 나타냅니다. 숫자가 낮을수록 저평가 상태입니다.")
     
     st.session_state.use_pbr = st.checkbox("✅ 최대 PBR 적용", value=st.session_state.use_pbr)
-    st.session_state.target_pbr = st.number_input("PBR (배)", value=st.session_state.target_pbr, step=0.1, disabled=not st.session_state.use_pbr)
+    st.session_state.target_pbr = st.number_input("PBR (배)", value=st.session_state.target_pbr, step=0.1, disabled=not st.session_state.use_pbr, help="주가순자산비율. 회사가 당장 망해서 전 재산을 팔았을 때와 비교한 주가입니다. 1보다 작으면 재산보다 주가가 싼 것입니다.")
     
     st.session_state.use_roe = st.checkbox("✅ 최소 ROE 적용", value=st.session_state.use_roe)
-    st.session_state.min_roe = st.number_input("ROE (%)", value=st.session_state.min_roe, step=1, disabled=not st.session_state.use_roe)
+    st.session_state.min_roe = st.number_input("ROE (%)", value=st.session_state.min_roe, step=1, disabled=not st.session_state.use_roe, help="자기자본이익률. 내 돈을 굴려서 1년에 몇 %의 수익을 냈는지 나타냅니다. 장사를 잘하는지 보는 지표입니다.")
     
     st.session_state.use_debt = st.checkbox("✅ 최대 부채비율 적용", value=st.session_state.use_debt)
-    st.session_state.max_debt = st.number_input("부채비율 (%)", value=st.session_state.max_debt, step=10, disabled=not st.session_state.use_debt)
+    st.session_state.max_debt = st.number_input("부채비율 (%)", value=st.session_state.max_debt, step=10, disabled=not st.session_state.use_debt, help="회사의 빚이 얼마나 많은지를 나타냅니다. 부채비율이 150% 이하인 기업이 안전합니다.")
     
-    st.session_state.use_op = st.checkbox("✅ 영업이익 흑자(+) 유지", value=st.session_state.use_op)
+    st.session_state.use_op = st.checkbox("✅ 영업이익 흑자(+) 유지", value=st.session_state.use_op, help="본업에서 돈을 까먹고 있지 않은(적자가 아닌) 기업만 걸러냅니다.")
     
     st.session_state.use_rsi = st.checkbox("✅ 최대 RSI 적용", value=st.session_state.use_rsi)
-    st.session_state.target_rsi = st.number_input("RSI (14일)", value=st.session_state.target_rsi, step=1, disabled=not st.session_state.use_rsi)
+    st.session_state.target_rsi = st.number_input("RSI (14일)", value=st.session_state.target_rsi, step=1, disabled=not st.session_state.use_rsi, help="상대강도지수. 차트의 열기를 잽니다. 30 이하면 과매도(바닥권), 70 이상이면 과매수(천장권)를 의미합니다.")
     
-    st.session_state.use_vol_surge = st.checkbox("🔥 오늘 거래량 2배 폭발 종목", value=st.session_state.use_vol_surge)
+    st.session_state.use_vol_surge = st.checkbox("🔥 오늘 거래량 폭발 종목만", value=st.session_state.use_vol_surge, help="평소(20일 평균) 대비 오늘 거래량이 엄청나게 터진 종목입니다. 시장의 돈이 몰리고 있다는 신호입니다.")
 
     st.session_state.use_rs = st.checkbox("🦅 최소 상대강도(RS) 적용", value=st.session_state.use_rs)
-    st.session_state.target_rs = st.number_input("최소 RS (%)", value=st.session_state.target_rs, step=1.0, disabled=not st.session_state.use_rs)
+    st.session_state.target_rs = st.number_input("최소 RS (%)", value=st.session_state.target_rs, step=1.0, disabled=not st.session_state.use_rs, help="코스피 지수 대비 얼마나 더 올랐는지 설정합니다. 예: 5를 입력하면 코스피보다 5% 이상 수익률이 좋은 시장 주도주만 걸러냅니다.")
 
 scan_button = st.sidebar.button("🎯 전체 시장 스캐너 가동", type="primary", use_container_width=True)
 
@@ -382,7 +383,6 @@ if scan_button or direct_scan_button:
             total_survivors = len(survivors_df)
             survivors_records = survivors_df.to_dict('records')
             
-            # 💡 [핵심 업그레이드] 코스피 데이터를 넉넉히(250일치) 가져와서 정확한 날짜 매칭 준비
             try:
                 df_kospi_rs = fdr.DataReader('KS11').tail(250)
             except:
@@ -400,7 +400,6 @@ if scan_button or direct_scan_button:
                             cur_vol = df_price['Volume'].iloc[-1]
                             vol_ratio = (cur_vol / avg_vol_20) * 100 if avg_vol_20 > 0 else 0
                             
-                            # 💡 [핵심 업그레이드] '정확한 날짜' 동기화 RS 계산 로직
                             if not df_kospi_rs.empty:
                                 date_today = df_price.index[-1]
                                 date_20days_ago = df_price.index[-20]
@@ -408,7 +407,6 @@ if scan_button or direct_scan_button:
                                 stock_today = df_price['Close'].iloc[-1]
                                 stock_20days_ago = df_price['Close'].iloc[-20]
                                 
-                                # 코스피 지수에서 정확히 해당 날짜의 값을 가져옴 (휴장일 보정을 위해 asof 사용)
                                 kospi_today = df_kospi_rs['Close'].asof(date_today)
                                 kospi_20days_ago = df_kospi_rs['Close'].asof(date_20days_ago)
                                 
@@ -598,7 +596,6 @@ if st.session_state.scanned_data is not None and not st.session_state.scanned_da
                     vwap_sig = "-"
                     if not df_kospi.empty and len(df_price) >= 120 and len(df_kospi) >= 20:
                         try:
-                            # 💡 여기에도 날짜 동기화 로직 적용 완료
                             date_today = df_price.index[-1]
                             date_20days_ago = df_price.index[-20]
                             
