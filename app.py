@@ -77,7 +77,6 @@ def calculate_rsi(df, period=14):
     rs = avg_gain / avg_loss
     return 100 - (100 / (1 + rs))
 
-# 💡 [핵심 업그레이드] 문서의 실전 캔들 패턴(20선 장대양봉, 눌림목 도지 등) 로직 반영
 def detect_candle_pattern(df):
     if len(df) < 20: return "데이터 부족"
     
@@ -98,16 +97,12 @@ def detect_candle_pattern(df):
     
     if total_range == 0: return "⚪ 보합"
     
-    # 1. 20선 지지 장대양봉 (매수세 유입)
     if L <= ma20 <= C and C > O and body >= total_range * 0.7:
         return "🔥 20선 지지 장대양봉"
-    # 2. 눌림목 도지 (거래량 감소 + 에너지 응축)
     if y_C > y_O and (y_C - y_O) >= (yest['High'] - yest['Low']) * 0.6 and body <= total_range * 0.1 and V < y_V:
         return "⏳ 눌림목 도지 (에너지 응축)"
-    # 3. 20선 위 역망치형 (매물 소화)
     if L > ma20 and upper_shadow >= body * 2 and lower_shadow <= body * 0.5 and C > O:
         return "☄️ 역망치형 (상단 매물 소화)"
-    # 4. 하락 후 밑꼬리 망치 (과매도 반등 신호)
     if C < df_temp['Close'].iloc[-5] and lower_shadow >= body * 2 and upper_shadow <= body * 0.5:
         return "🔨 하락 후 망치형 (저점 반등)"
         
@@ -387,11 +382,11 @@ if scan_button or direct_scan_button:
             total_survivors = len(survivors_df)
             survivors_records = survivors_df.to_dict('records')
             
+            # 💡 [핵심 업그레이드] 코스피 데이터를 넉넉히(250일치) 가져와서 정확한 날짜 매칭 준비
             try:
-                df_kospi_rs = fdr.DataReader('KS11').tail(20)
-                ret_1m_kospi = (df_kospi_rs['Close'].iloc[-1] - df_kospi_rs['Close'].iloc[-20]) / df_kospi_rs['Close'].iloc[-20] * 100 if len(df_kospi_rs) >= 20 else 0
+                df_kospi_rs = fdr.DataReader('KS11').tail(250)
             except:
-                ret_1m_kospi = 0
+                df_kospi_rs = pd.DataFrame()
             
             for idx, row_dict in enumerate(survivors_records):
                 try:
@@ -405,10 +400,24 @@ if scan_button or direct_scan_button:
                             cur_vol = df_price['Volume'].iloc[-1]
                             vol_ratio = (cur_vol / avg_vol_20) * 100 if avg_vol_20 > 0 else 0
                             
-                            ret_1m_stock = (df_price['Close'].iloc[-1] - df_price['Close'].iloc[-20]) / df_price['Close'].iloc[-20] * 100
-                            rs_1m = ret_1m_stock - ret_1m_kospi
+                            # 💡 [핵심 업그레이드] '정확한 날짜' 동기화 RS 계산 로직
+                            if not df_kospi_rs.empty:
+                                date_today = df_price.index[-1]
+                                date_20days_ago = df_price.index[-20]
+                                
+                                stock_today = df_price['Close'].iloc[-1]
+                                stock_20days_ago = df_price['Close'].iloc[-20]
+                                
+                                # 코스피 지수에서 정확히 해당 날짜의 값을 가져옴 (휴장일 보정을 위해 asof 사용)
+                                kospi_today = df_kospi_rs['Close'].asof(date_today)
+                                kospi_20days_ago = df_kospi_rs['Close'].asof(date_20days_ago)
+                                
+                                ret_1m_stock = (stock_today - stock_20days_ago) / stock_20days_ago * 100
+                                ret_1m_kospi = (kospi_today - kospi_20days_ago) / kospi_20days_ago * 100
+                                rs_1m = ret_1m_stock - ret_1m_kospi
+                            else:
+                                rs_1m = -999
                             
-                            # 💡 [핵심 업그레이드] 수급 에너지(Volume Power) 계산 로직
                             df_5d = df_price.tail(5)
                             up_vol = df_5d[df_5d['Close'] > df_5d['Open']]['Volume'].sum()
                             down_vol = df_5d[df_5d['Close'] < df_5d['Open']]['Volume'].sum()
@@ -433,7 +442,7 @@ if scan_button or direct_scan_button:
                                 row_dict['RSI'] = round(rsi_val, 1)
                                 row_dict['RS(%)'] = round(rs_1m, 1) 
                                 row_dict['거래량(%)'] = f"{int(vol_ratio)}%" 
-                                row_dict['수급에너지(VP)'] = f"{int(vp_ratio)}%" # 💡 신규 표기 컬럼
+                                row_dict['수급에너지(VP)'] = f"{int(vp_ratio)}%" 
                                 row_dict['52주 최고'] = int(high_52w) 
                                 row_dict['52주 최저'] = int(low_52w)  
                                 final_results.append(row_dict)
@@ -472,7 +481,7 @@ if st.session_state.scanned_data is not None and not st.session_state.scanned_da
         if 'RSI' in display_df.columns: display_cols.append('RSI')
         if 'RS(%)' in display_df.columns: display_cols.append('RS(%)') 
         if '거래량(%)' in display_df.columns: display_cols.append('거래량(%)') 
-        if '수급에너지(VP)' in display_df.columns: display_cols.append('수급에너지(VP)') # 💡 VP 열 추가
+        if '수급에너지(VP)' in display_df.columns: display_cols.append('수급에너지(VP)') 
         
         st.dataframe(display_df[display_cols], use_container_width=True, hide_index=True, 
             column_config={
@@ -552,7 +561,6 @@ if st.session_state.scanned_data is not None and not st.session_state.scanned_da
                     else:
                         vol_sig, bb_sig = "-", "-"
 
-                    # 💡 스마트 캔들 분석 로직 적용
                     candle_sig = detect_candle_pattern(df_price)
                     
                     def get_historical_signals(idx):
@@ -590,8 +598,15 @@ if st.session_state.scanned_data is not None and not st.session_state.scanned_da
                     vwap_sig = "-"
                     if not df_kospi.empty and len(df_price) >= 120 and len(df_kospi) >= 20:
                         try:
+                            # 💡 여기에도 날짜 동기화 로직 적용 완료
+                            date_today = df_price.index[-1]
+                            date_20days_ago = df_price.index[-20]
+                            
+                            kospi_today = df_kospi['Close'].asof(date_today)
+                            kospi_20days_ago = df_kospi['Close'].asof(date_20days_ago)
+                            
                             ret_1m_stock = (current_price - df_price['Close'].iloc[-20]) / df_price['Close'].iloc[-20] * 100
-                            ret_1m_kospi = (df_kospi['Close'].iloc[-1] - df_kospi['Close'].iloc[-20]) / df_kospi['Close'].iloc[-20] * 100
+                            ret_1m_kospi = (kospi_today - kospi_20days_ago) / kospi_20days_ago * 100
                             rs_1m = ret_1m_stock - ret_1m_kospi
                             if rs_1m > 5: rs_sig = f"🔥 주도주 (+{rs_1m:.1f}%)"
                             elif rs_1m < -5: rs_sig = f"🧊 소외주 ({rs_1m:.1f}%)"
@@ -757,7 +772,6 @@ if st.session_state.scanned_data is not None and not st.session_state.scanned_da
                     dividend = row.get('배당(%)', 0.0)
                     s_rim_val = row.get('S-RIM적정가', 0)
                     
-                    # 💡 프롬프트에 제공할 데이터 묶음
                     report_data = f"""
                     [종목 정보] {target_name} (코드: {target_code})
                     [재무/가치] PER: {row['PER']}배, PBR: {row['PBR']}배, ROE: {row['ROE']}%, 부채비율: {row['부채비율(%)']}%, 시가총액: {row['시가총액(억)']}억원, 최근 영업이익: {row['영업이익(억)']}억원
@@ -772,7 +786,6 @@ if st.session_state.scanned_data is not None and not st.session_state.scanned_da
                     [★세력 수급 추이 (최근 5일)]\n{trend_str_for_ai}
                     """
                     
-                    # 💡 [핵심 업그레이드] 호가창 분석 및 -2% 기계적 손절 강제 프롬프트
                     prompt = f"""
                     당신은 프랍 트레이딩 펌의 수석 애널리스트입니다. 제공된 데이터를 바탕으로 15개 항목 투자 리포트를 작성하라. 
                     제공된 데이터가 있다면 막연한 소리 대신 해당 숫자를 반드시 인용하여 분석할 것. 
